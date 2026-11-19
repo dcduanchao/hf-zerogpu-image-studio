@@ -187,9 +187,6 @@ with gr.Blocks(title="AI 图片工作室") as demo:
     refresh_button.click(refresh_active_model, inputs=[],
                          outputs=[model, size, mode, source, strength, model_info, run],
                          api_visibility="private")
-    model.change(on_model_change, inputs=model,
-                 outputs=[size, mode, source, strength, model_info],
-                 api_visibility="private")
     mode.change(
         lambda value: (gr.update(visible=value == "图片编辑"),
                        gr.update(visible=value == "图片编辑")),
