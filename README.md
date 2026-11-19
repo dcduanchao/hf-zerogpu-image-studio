@@ -86,7 +86,7 @@ my-zerogpu-engine (ZeroGPU, Gradio)
 
 ```bash
 python -m compileall -q gpu-space ui-space scripts
-python -m pip install 'huggingface_hub>=2.1.1,<3' 'gradio_client>=1.13,<3'
+python -m pip install 'huggingface_hub>=0.34,<2,<3' 'gradio_client>=1.13,<3'
 python scripts/test_admin_switch.py
 python scripts/test_model_state.py
 ```
@@ -122,7 +122,7 @@ python app.py
 
 ### 查看访问者的 ZeroGPU 剩余额度
 
-在页面的 **Hugging Face Token** 区域输入你自己的 Token，点击 **“验证 Token / 查询 ZeroGPU 剩余时间”**。页面会分别显示账号身份、官方返回的剩余 GPU 时间、基础额度和重置时间（以 UTC 显示）。配额查询使用 `HfApi.get_zero_gpu_quota()`，要求 CPU Space 安装 `huggingface_hub>=2.1.1`。Fine-grained Token 需要 **Billing → Read billing usage and payment method status** 权限；查询失败时仍然可显示已验证的用户名，不会把配额查询错误误判为无效 Token。剩余时间是 GPU 配额秒数，不等于一次任务能连续运行的时长。匿名模式无法查询个人剩余额度。
+在页面的 **Hugging Face Token** 区域输入你自己的 Token，点击 **“验证 Token / 查询 ZeroGPU 剩余时间”**。页面会分别显示账号身份、官方返回的剩余 GPU 时间、基础额度和重置时间（以 UTC 显示）。配额查询使用 Hugging Face 官方只读 HTTPS 接口 `/api/spaces/zero-gpu/quota`，保持与 Gradio 6.15.1 所需 `huggingface_hub<2` 的兼容性。Fine-grained Token 需要 **Billing → Read billing usage and payment method status** 权限；查询失败时仍然可显示已验证的用户名，不会把配额查询错误误判为无效 Token。剩余时间是 GPU 配额秒数，不等于一次任务能连续运行的时长。匿名模式无法查询个人剩余额度。
 
 ## 6. OpenAI Images API 教程
 

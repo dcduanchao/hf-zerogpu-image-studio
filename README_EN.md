@@ -84,7 +84,7 @@ Keep `gpu-space/README.md` and `ui-space/README.md`: their YAML front matter is 
 
 ```bash
 python -m compileall -q gpu-space ui-space scripts
-python -m pip install 'huggingface_hub>=2.1.1,<3' 'gradio_client>=1.13,<3'
+python -m pip install 'huggingface_hub>=0.34,<2,<3' 'gradio_client>=1.13,<3'
 python scripts/test_admin_switch.py
 python scripts/test_model_state.py
 ```
@@ -120,7 +120,7 @@ The owner/admin token is privileged: use it only in a trusted UI. No privileged 
 
 ### Check your personal ZeroGPU time remaining
 
-In the **Hugging Face Token** panel, enter your own visitor token and select **“验证 Token / 查询 ZeroGPU 剩余时间”** (Verify Token / Check remaining ZeroGPU time). The UI shows the verified username, quota remaining, base quota, and reset time (UTC) as returned by Hugging Face. It calls `HfApi.get_zero_gpu_quota()`, available in `huggingface_hub>=2.1.1`. Fine-grained tokens require the **Billing → Read billing usage and payment method status** permission. When quota lookup fails, the app keeps the successful identity validation and clearly reports that quota is unavailable. Remaining GPU-seconds are *not* a guarantee of uninterrupted inference time. Anonymous users cannot query personal remaining time.
+In the **Hugging Face Token** panel, enter your own visitor token and select **“验证 Token / 查询 ZeroGPU 剩余时间”** (Verify Token / Check remaining ZeroGPU time). The UI shows the verified username, quota remaining, base quota, and reset time (UTC) as returned by Hugging Face. It calls the official read-only HTTPS endpoint `/api/spaces/zero-gpu/quota` directly, while retaining the `huggingface_hub<2` dependency required by Gradio 6.15.1. Fine-grained tokens require the **Billing → Read billing usage and payment method status** permission. When quota lookup fails, the app keeps the successful identity validation and clearly reports that quota is unavailable. Remaining GPU-seconds are *not* a guarantee of uninterrupted inference time. Anonymous users cannot query personal remaining time.
 
 ## 6. OpenAI-compatible Images API
 

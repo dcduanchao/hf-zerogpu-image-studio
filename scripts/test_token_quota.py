@@ -1,4 +1,4 @@
-"""Unit tests for authenticated ZeroGPU quota display; no real tokens or network."""
+"""Offline quota tests; never send real HF credentials or call external services."""
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -17,48 +17,42 @@ class TestTokenQuota(unittest.TestCase):
     def test_invalid_token_format(self):
         self.assertIn("格式无效", token_quota.token_quota_info("invalid"))
 
-    def test_success(self):
-        api = SimpleNamespace(
-            whoami=lambda: {"name": "tester"},
-            get_zero_gpu_quota=lambda: SimpleNamespace(
-                remaining=1810, base=2400,
-                resets_at=datetime(2026, 11, 20, 0, 0, tzinfo=timezone.utc),
-            ),
+    def test_success_and_official_quota_fields(self):
+        fake_response = SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"current": 1810, "base": 2400, "resetsAt": "2026-11-20T00:00:00Z"},
         )
-        with patch.object(token_quota, "HfApi", return_value=api) as call:
+        with patch.object(token_quota, "httpx") as http, patch.object(
+            token_quota, "HfApi", return_value=SimpleNamespace(whoami=lambda: {"name": "tester"})
+        ):
+            http.get.return_value = fake_response
             result = token_quota.token_quota_info("hf_test123")
-            self.assertEqual(call.call_args.kwargs["token"], "hf_test123")
+            self.assertEqual(http.get.call_args.kwargs["headers"]["Authorization"], "Bearer hf_test123")
+            self.assertEqual(http.get.call_args.args[0], token_quota.QUOTA_ENDPOINT)
         self.assertIn("tester", result)
         self.assertIn("30 分 10 秒", result)
         self.assertIn("40 分 0 秒", result)
         self.assertIn("2026-11-20 00:00:00 UTC", result)
 
     def test_quota_failure_keeps_verified_identity(self):
-        def fail_quota():
-            raise PermissionError("Billing scope missing")
-        api = SimpleNamespace(
-            whoami=lambda: {"name": "tester"},
-            get_zero_gpu_quota=fail_quota,
-        )
-        with patch.object(token_quota, "HfApi", return_value=api):
+        with patch.object(token_quota, "fetch_quota", side_effect=PermissionError()), patch.object(
+            token_quota, "HfApi", return_value=SimpleNamespace(whoami=lambda: {"name": "tester"})
+        ):
             result = token_quota.token_quota_info("hf_test123")
         self.assertIn("Token 有效：tester", result)
         self.assertIn("暂时无法查询", result)
 
     def test_identity_failure(self):
-        def fail_auth():
-            raise ValueError("invalid auth")
-        api = SimpleNamespace(whoami=fail_auth)
-        with patch.object(token_quota, "HfApi", return_value=api):
+        with patch.object(token_quota, "HfApi", side_effect=ValueError()):
             self.assertIn("验证失败", token_quota.token_quota_info("hf_test123"))
 
     def test_none_reset(self):
-        api = SimpleNamespace(
-            whoami=lambda: {"name": "tester"},
-            get_zero_gpu_quota=lambda: SimpleNamespace(remaining=120, base=180, resets_at=None),
-        )
-        with patch.object(token_quota, "HfApi", return_value=api):
-            self.assertIn("暂未提供", token_quota.token_quota_info("hf_test123"))
+        with patch.object(token_quota, "httpx") as http:
+            http.get.return_value = SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"current": 120, "base": 180, "resetsAt": None},
+            )
+            self.assertIn("暂未提供", token_quota.fetch_quota("hf_test123")[2])
 
 
 if __name__ == "__main__":
