@@ -22,9 +22,9 @@ def main():
         raise ValueError("Space names must be nonempty and have no slash")
     gpu_id = f"{namespace}/{gpu_name}"
     ui_id = f"{namespace}/{ui_name}"
-    for repo_id, directory in ((gpu_id, "gpu-space"), (ui_id, "ui-space")):
+    for repo_id, directory, sdk in ((gpu_id, "gpu-space", "gradio"), (ui_id, "ui-space", "docker")):
         print(f"Creating/updating {repo_id} from {directory}")
-        api.create_repo(repo_id=repo_id, repo_type="space", space_sdk="gradio",
+        api.create_repo(repo_id=repo_id, repo_type="space", space_sdk=sdk,
                         private=False, exist_ok=True)
         api.upload_folder(repo_id=repo_id, repo_type="space",
                           folder_path=str(ROOT / directory),
