@@ -89,7 +89,7 @@ CSS = """
 .gradio-container {max-width: 980px!important; margin: auto!important;}
 #hero {text-align: center; padding: 8px 0 14px;}
 """
-with gr.Blocks(title="AI 图片工作室", css=CSS) as demo:
+with gr.Blocks(title="AI 图片工作室") as demo:
     gr.Markdown("# 🎨 AI 图片工作室\n文生图 · 图片编辑 · Hugging Face ZeroGPU", elem_id="hero")
     with gr.Row():
         with gr.Column(scale=5):
