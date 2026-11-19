@@ -34,6 +34,17 @@ jobs:
                       print("COMPONENTS", json.dumps([{ "id": c.get("id"), "type": c.get("type"), "props": {k:v for k,v in c.get("props",{}).items() if k in ("label","value","choices","minimum","maximum")}} for c in config.get("components",[])],ensure_ascii=False,default=str)[:18000],flush=True)
               except Exception as exc:
                   print("PROBE ERROR", type(exc).__name__,str(exc)[:200],flush=True)
+          for filename in ("README.md", "app.py", "requirements.txt", "pipeline_moss_image.py"):
+              try:
+                  url="https://huggingface.co/spaces/asrarkhann112/moss-image-nsfw-lora/raw/main/"+filename
+                  r=requests.get(url,timeout=35)
+                  print("SOURCE",filename,"status",r.status_code,"length",len(r.content),flush=True)
+                  if r.ok:
+                      print("BEGIN SOURCE",filename,flush=True)
+                      print(r.text[:45000],flush=True)
+                      print("END SOURCE",filename,flush=True)
+              except Exception as exc:
+                  print("SOURCE ERROR",filename,type(exc).__name__,flush=True)
           try:
               c=Client("asrarkhann112/moss-image-nsfw-lora", download_files=False)
               c.view_api()
