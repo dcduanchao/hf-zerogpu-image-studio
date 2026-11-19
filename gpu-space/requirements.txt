@@ -1,0 +1,7 @@
+diffusers>=0.36.0,<1
+transformers>=4.51,<6
+accelerate>=1.7
+safetensors
+sentencepiece
+protobuf
+Pillow
