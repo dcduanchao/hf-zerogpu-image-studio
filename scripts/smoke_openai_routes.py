@@ -24,7 +24,8 @@ for path in ("/health", "/v1/models"):
                 success = True
                 break
         except Exception as exc:
-            print(f"{path} try {attempt+1}: {type(exc).__name__}")
+            code = getattr(exc, "code", None)
+            print(f"{path} try {attempt+1}: {type(exc).__name__} HTTP={code}", flush=True)
             if attempt < 11:
                 time.sleep(10)
     if not success:
