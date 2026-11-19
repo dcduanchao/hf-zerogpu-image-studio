@@ -42,7 +42,7 @@ my-zerogpu-engine (Gradio, ZeroGPU)
 | `ui-space/openai_api.py` | OpenAI Images-compatible API subset |
 | `ui-space/model_registry.py` | Supported model IDs, dimensions and edit capabilities |
 | `ui-space/model_router.py` / `model_adapters/` | Model-specific client dispatch |
-| `ui-space/model_state.py` | Read the *actually loaded* GPU model and reject mismatches |
+| `ui-space/model_state.py` | Read the *actually loaded* GPU model; the UI rejects mismatches and the OpenAI API resolves to it |
 | `ui-space/admin_switch.py` | Verify the HF owner's identity and change the GPU Space variable |
 | `scripts/deploy_spaces.py` / `scripts/check_spaces.py` | Publish and inspect the two Spaces |
 | `.github/workflows/deploy-spaces.yml` | CI checks and automatic deployment |
@@ -58,7 +58,7 @@ Keep `gpu-space/README.md` and `ui-space/README.md`: their YAML front matter is 
 
 - Only the owner of the Hugging Face GPU Space can switch models. The admin control verifies the supplied HF Token with Hugging Face, requires the account name to match `HF_ADMIN_USERNAME`, and requires write permission on the GPU Space.
 - Public visitors see only the currently loaded model in the UI, with a manual status-refresh action.
-- Sending a different model ID to the API does **not** cause an implicit switch: **HTTP 409 / `model_not_active`** asks the caller to contact the administrator. An unavailable or restarting backend results in **503 / `gpu_model_unavailable`**.
+- The OpenAI API accepts an omitted, stale, or unknown `model` value and routes text-to-image to the **actually loaded GPU model**. The response includes the effective `model` and `size`. This does not change the active model; only the owner can do that. An unavailable backend returns **503 / `gpu_model_unavailable`**.
 - Updating `ACTIVE_GPU_MODEL` triggers a Space restart; any in-flight inference may be interrupted. After restart, reload the current-model status in the UI.
 - `GET /v1/models` enumerates **registered** models, not necessarily live ones. Use `GET /v1/models/active` for the actual loaded model.
 
@@ -152,7 +152,7 @@ curl -sS "$BASE/v1/images/generations" \
   }'
 ```
 
-Set `model` to the value returned by `/v1/models/active`. When MOSS is active, use `"model":"moss-image"` and a supported MOSS size returned by `/v1/models`. URL responses contain a `created` timestamp and `data[].url` pointing to a temporary GPU Space image; such URLs can expire.
+The `model` field is optional and advisory: the API always generates with the actual `/v1/models/active` model, even if the caller sends an old or unknown model ID. If the requested `size` is unsupported by that model, the API uses its default size. Read the effective `model` and `size` fields in the response. Editing still fails with `unsupported_edit` if the current model cannot edit images. URL responses contain a `created` timestamp, the effective `model` and `size`, and `data[].url` pointing to a temporary GPU Space image; such URLs can expire.
 
 ### Optional HF Token and Base64 response
 
@@ -194,7 +194,7 @@ This endpoint only works when Z-Image is the active model. Uploads are limited t
 | --- | --- | --- |
 | 400 | `model_not_found`, `invalid_size`, etc. | Invalid model ID, resolution or input |
 | 401 | `invalid_token` / `hf_auth_failed` | Check your visitor HF Token |
-| 409 | `model_not_active` | The requested model is not loaded; contact the admin |
+| 400 | `unsupported_edit` | The active model does not support editing; contact the admin |
 | 413 | `image_too_large` / `too_many_pixels` | Uploaded image exceeds limits |
 | 429 | `zero_gpu_quota_exceeded` | Quota or GPU duration limit |
 | 503 | `gpu_model_unavailable` | GPU restarting, building or unreachable |

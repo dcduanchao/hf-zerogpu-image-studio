@@ -44,7 +44,7 @@ my-zerogpu-engine (ZeroGPU, Gradio)
 | `ui-space/openai_api.py` | OpenAI Images 兼容子集 |
 | `ui-space/model_registry.py` | 支持的模型、尺寸、编辑能力 |
 | `ui-space/model_router.py`、`model_adapters/` | 模型请求分发 |
-| `ui-space/model_state.py` | 查询 GPU 运行进程中的实际活动模型，拒绝不匹配请求 |
+| `ui-space/model_state.py` | 查询 GPU 运行进程中的实际活动模型，核对活动模型，网页拒绝不匹配请求；OpenAI API 自动改用活动模型 |
 | `ui-space/admin_switch.py` | 校验 HF 账号所有权后更新 GPU Space 变量 |
 | `scripts/deploy_spaces.py`、`scripts/check_spaces.py` | 部署及只读状态检查 |
 | `.github/workflows/deploy-spaces.yml` | 自动检查及发布两个 Space |
@@ -60,7 +60,7 @@ my-zerogpu-engine (ZeroGPU, Gradio)
 
 - **只有 HF Space 所有者**能够切换活动模型。管理员必须在页面提供与 `HF_ADMIN_USERNAME` 相同账号的有效 HF Token，且该 Token 对 GPU Space 有写权限。
 - 普通用户的模型下拉框只展示当前加载的模型；页面可手动刷新状态。
-- 客户端即使直接传入另一个 `model`，也不会静默切换：返回 **HTTP 409 `model_not_active`**，提示联系管理员；状态暂不可用时返回 **503 `gpu_model_unavailable`**。
+- OpenAI API 的 `model` 是可选提示：无论填写过时、不存在的模型 ID，还是省略该字段，服务端均使用**当前实际激活模型**执行文生图，并在响应中返回 `model` 和最终 `size`。页面和管理员切换不受此规则影响；状态暂不可用时返回 **503 `gpu_model_unavailable`**。
 - 管理员更改 `ACTIVE_GPU_MODEL` 后，GPU Space 需要重启，生成中的任务可能中断。切换完成后点“刷新当前模型状态”。
 - `GET /v1/models` 列出**已注册模型**，并不表示所有模型同时加载；以 `GET /v1/models/active` 为准。
 
@@ -152,7 +152,7 @@ curl -sS "$BASE/v1/images/generations" \
   }'
 ```
 
-`model` 必须与 `/v1/models/active` 中 `model` 一致。例如管理员已切换到 MOSS，则使用 `"model":"moss-image"` 并从 `/v1/models` 选择 MOSS 支持的尺寸。URL 响应形如 `{"created": 1234567890, "data":[{"url":"https://..."}]}`，上游临时图片 URL 可能过期。
+`model` 可以省略或传入旧模型 ID；API 会自动改用 `/v1/models/active` 返回的当前激活模型。若传入的尺寸不被当前模型支持，使用当前模型的默认尺寸，并在响应 `size` 中说明。若当前模型不支持图片编辑，则编辑请求仍返回 `unsupported_edit`。URL 响应形如 `{"created": 1234567890, "model":"moss-image", "size":"1024x1024", "data":[{"url":"https://..."}]}`，上游临时图片 URL 可能过期。
 
 ### 使用自己的 HF Token / Base64
 
@@ -194,7 +194,7 @@ curl -sS "$BASE/v1/images/edits" \
 | --- | --- | --- |
 | 400 | `model_not_found`、`invalid_size` 等 | 模型 ID、尺寸或参数非法 |
 | 401 | `invalid_token` / `hf_auth_failed` | 检查访问者 HF Token |
-| 409 | `model_not_active` | 请求了未加载模型，联系管理员 |
+| 400 | `unsupported_edit` | 当前模型不支持图片编辑，联系管理员切换 |
 | 413 | `image_too_large` / `too_many_pixels` | 编辑上传过大 |
 | 429 | `zero_gpu_quota_exceeded` | ZeroGPU 配额或任务时间受限 |
 | 503 | `gpu_model_unavailable` | GPU 正在启动、构建、切换或暂不可用 |

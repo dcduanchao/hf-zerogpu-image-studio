@@ -10,7 +10,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from model_registry import MODELS, get_model
 from model_router import generate as route_generate, image_url, local_image_path
-from model_state import active_model_id, require_active_model, ModelMismatch, ModelUnavailable
+from model_state import active_model_id, ModelMismatch, ModelUnavailable
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
@@ -22,7 +22,7 @@ app = FastAPI(title="ZeroGPU OpenAI-Compatible Images API")
 
 
 class GenerateRequest(BaseModel):
-    model: str = "z-image-turbo"
+    model: str | None = None
     prompt: str = Field(min_length=1, max_length=4000)
     size: str = "512x512"
     n: int = Field(default=1, ge=1, le=4)
@@ -59,25 +59,28 @@ def credentials(authorization: str | None, x_hf_token: str | None):
 
 
 def validate(model, size, n, edit=False):
+    """Resolve the actually loaded model; client-provided model is advisory.
+
+    For text-to-image, a size unsupported by the active model falls back to its
+    default size. Editing requires an edit-capable active model.
+    """
     try:
-        spec = get_model(model)
-    except ValueError:
-        raise api_error(400, "model_not_found", "不支持该模型") from None
-    except RuntimeError:
-        raise api_error(503, "model_not_configured", "模型服务未配置") from None
-    try:
-        require_active_model(model)
-    except ModelMismatch as exc:
-        raise api_error(409, "model_not_active", str(exc)) from None
+        active = active_model_id()
+        spec = get_model(active)
     except ModelUnavailable as exc:
         raise api_error(503, "gpu_model_unavailable", str(exc)) from None
+    except (ValueError, RuntimeError):
+        raise api_error(503, "model_not_configured", "当前 GPU 模型未配置") from None
+
     if edit and not spec.can_edit:
-        raise api_error(400, "unsupported_edit", "该模型不支持图片编辑")
-    if size not in spec.sizes:
-        raise api_error(400, "invalid_size", f"该模型支持尺寸：{', '.join(spec.sizes)}")
+        raise api_error(400, "unsupported_edit", "当前激活模型不支持图片编辑，请联系管理员切换模型")
     if not 1 <= int(n) <= 4:
         raise api_error(400, "invalid_n", "n 必须为 1~4")
-    return tuple(map(int, size.split("x")))
+    # Unknown, omitted, or stale model identifiers are accepted for
+    # compatibility; the GPU model is never changed by this endpoint.
+    resolved_size = size if size in spec.sizes else spec.default_size
+    width, height = map(int, resolved_size.split("x"))
+    return active, resolved_size, width, height
 
 
 def classify_error(exc):
@@ -103,19 +106,19 @@ def to_base64(path):
 
 def predict(model, prompt, size, n, token, image_path=None, strength=0.6,
             seed=-1, response_format="url"):
-    width, height = validate(model, size, n, edit=image_path is not None)
+    active, resolved_size, width, height = validate(model, size, n, edit=image_path is not None)
     if response_format not in ("url", "b64_json"):
         raise api_error(400, "unsupported_format", "仅支持 url 或 b64_json")
     try:
         data = []
         for _ in range(n):
             image, _meta = route_generate(
-                model, prompt, width, height, seed=seed, token=token,
+                active, prompt, width, height, seed=seed, token=token,
                 image_path=image_path, strength=strength,
                 download_files=response_format == "b64_json",
             )
             if response_format == "url":
-                data.append({"url": image_url(image, model)})
+                data.append({"url": image_url(image, active)})
             else:
                 data.append({"b64_json": to_base64(local_image_path(image))})
     except HTTPException:
@@ -126,7 +129,7 @@ def predict(model, prompt, size, n, token, image_path=None, strength=0.6,
         raise api_error(503, "gpu_model_unavailable", str(exc)) from None
     except Exception as exc:
         raise classify_error(exc) from None
-    return {"created": int(time.time()), "data": data}
+    return {"created": int(time.time()), "model": active, "size": resolved_size, "data": data}
 
 
 @app.get("/health")
@@ -165,7 +168,7 @@ def generate_images(req: GenerateRequest,
 async def edit_images(
     image: UploadFile = File(...),
     prompt: str = Form(...),
-    model: str = Form("z-image-turbo"),
+    model: str | None = Form(None),
     size: str = Form("512x512"),
     n: int = Form(1),
     strength: float = Form(0.6),
@@ -174,7 +177,6 @@ async def edit_images(
     x_hf_token: str | None = Header(default=None),
 ):
     token = credentials(authorization, x_hf_token)
-    validate(model, size, n, edit=True)
     if not prompt.strip() or len(prompt) > 4000:
         raise api_error(400, "invalid_prompt", "提示词不能为空且不能超出 4000 字")
     if not 0.05 <= strength <= 1.0:

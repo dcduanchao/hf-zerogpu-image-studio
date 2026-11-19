@@ -10,6 +10,7 @@ on:
       - 'scripts/smoke_openai_routes.py'
       - 'scripts/test_admin_switch.py'
       - 'scripts/test_model_state.py'
+      - 'scripts/test_openai_model_resolution.py'
       - 'scripts/test_token_quota.py'
       - '.github/workflows/deploy-spaces.yml'
   workflow_dispatch:
@@ -45,6 +46,10 @@ jobs:
         run: python scripts/test_model_state.py
       - name: Verify visitor ZeroGPU quota display
         run: python scripts/test_token_quota.py
+      - name: Verify OpenAI active-model fallback and response metadata
+        run: |
+          python -m pip install 'fastapi>=0.115,<1' 'python-multipart>=0.0.9' Pillow
+          python scripts/test_openai_model_resolution.py
       - name: Publish GPU and UI Spaces
         run: python scripts/deploy_spaces.py
       - name: Check Hugging Face Space build status
