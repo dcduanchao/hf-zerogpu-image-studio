@@ -18,11 +18,15 @@ def main():
         raise ValueError("HF_NAMESPACE must be a user/organization name")
     gpu_name = os.environ.get("GPU_SPACE_NAME", "my-zerogpu-engine").strip()
     ui_name = os.environ.get("UI_SPACE_NAME", "my-image-studio").strip()
-    if any("/" in v or not v for v in (gpu_name, ui_name)):
+    moss_name = os.environ.get("MOSS_SPACE_NAME", "my-moss-image-engine").strip()
+    if any("/" in v or not v for v in (gpu_name, ui_name, moss_name)):
         raise ValueError("Space names must be nonempty and have no slash")
     gpu_id = f"{namespace}/{gpu_name}"
     ui_id = f"{namespace}/{ui_name}"
-    for repo_id, directory, sdk in ((gpu_id, "gpu-space", "gradio"), (ui_id, "ui-space", "docker")):
+    moss_id = f"{namespace}/{moss_name}"
+    for repo_id, directory, sdk in ((gpu_id, "gpu-space", "gradio"),
+                                    (ui_id, "ui-space", "docker"),
+                                    (moss_id, "moss-space", "gradio")):
         print(f"Creating/updating {repo_id} from {directory}")
         api.create_repo(repo_id=repo_id, repo_type="space", space_sdk=sdk,
                         private=False, exist_ok=True)
@@ -30,9 +34,11 @@ def main():
                           folder_path=str(ROOT / directory),
                           commit_message="Deploy from GitHub Actions")
     api.add_space_variable(repo_id=ui_id, key="GPU_SPACE_ID", value=gpu_id)
+    api.add_space_variable(repo_id=ui_id, key="MOSS_SPACE_ID", value=moss_id)
     print(f"GPU: https://huggingface.co/spaces/{gpu_id}")
     print(f"UI: https://huggingface.co/spaces/{ui_id}")
-    print("Select ZeroGPU for GPU Space manually in Settings > Hardware.")
+    print(f"MOSS: https://huggingface.co/spaces/{moss_id}")
+    print("Select ZeroGPU for the new MOSS Space manually in Settings > Hardware.")
 
 if __name__ == "__main__":
     main()
