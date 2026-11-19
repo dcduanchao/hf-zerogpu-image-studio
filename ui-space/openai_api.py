@@ -165,7 +165,8 @@ def generate_images(req: GenerateRequest,
                     authorization: str | None = Header(default=None),
                     x_hf_token: str | None = Header(default=None)):
     token = credentials(authorization, x_hf_token)
-    return predict(req.model, req.prompt, req.size, req.n, token, seed=req.seed,\n                   response_format=req.response_format)
+    return predict(req.model, req.prompt, req.size, req.n, token, seed=req.seed,
+                   response_format=req.response_format)
 
 
 @app.post("/v1/images/edits")
@@ -198,6 +199,7 @@ async def edit_images(
             with tempfile.TemporaryDirectory(prefix="image_gateway_") as folder:
                 filename = Path(folder) / "source.png"
                 img.convert("RGB").save(filename, "PNG")
-                return predict(model, prompt, size, n, token, image_path=filename,\n                               strength=strength, response_format=response_format)
+                return predict(model, prompt, size, n, token, image_path=filename,
+                               strength=strength, response_format=response_format)
     except (UnidentifiedImageError, ValueError, OSError):
         raise api_error(400, "invalid_image", "上传的图片不能读取") from None
