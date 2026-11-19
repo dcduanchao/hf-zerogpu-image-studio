@@ -7,6 +7,7 @@ on:
       - 'gpu-space/**'
       - 'ui-space/**'
       - 'scripts/deploy_spaces.py'
+      - 'scripts/smoke_openai_routes.py'
       - '.github/workflows/deploy-spaces.yml'
   workflow_dispatch:
 
