@@ -5,6 +5,7 @@ import gradio as gr
 from huggingface_hub import HfApi
 from model_registry import MODELS, display_names, get_model
 from model_router import generate as route_generate, local_image_path
+from admin_switch import SwitchDenied, switch_active_model
 
 MODEL_NAMES = display_names()
 SIZE_LABEL = lambda size: size.replace("x", " × ")
@@ -95,6 +96,14 @@ def token_info(token):
         return "Token 验证失败；请检查权限和内容。"
 
 
+def admin_switch_model(model_label, admin_token):
+    try:
+        model_id = MODEL_NAMES[model_label]
+        return switch_active_model(model_id, admin_token)
+    except (SwitchDenied, KeyError) as exc:
+        return f"切换失败：{exc}"
+
+
 CSS = """
 .gradio-container {max-width: 980px!important; margin: auto!important;}
 #hero {text-align: center; padding: 8px 0 14px;}
@@ -125,6 +134,15 @@ with gr.Blocks(title="AI 图片工作室") as demo:
                 gr.Markdown("Token 仅用于本次请求，禁止记录到日志；使用你信任的 Space。")
             model_info = gr.Markdown("当前模型：Z-Image Turbo · 支持文生图和图片编辑")
             run = gr.Button("开始生成", variant="primary")
+            with gr.Accordion("管理员 · 切换 GPU 模型（仅所有者）", open=False):
+                gr.Markdown("切换后 GPU Space 将重启，正在执行的生成任务可能中断。只有经过 HF 账号验证的 Space 所有者有权操作。")
+                admin_model = gr.Dropdown(list(MODEL_NAMES), value=MODELS["z-image-turbo"].name, label="要加载的 GPU 模型")
+                admin_token = gr.Textbox(label="管理员 HF Token（需具有 Space 写权限）",
+                                         type="password", placeholder="hf_...")
+                admin_run = gr.Button("验证身份并切换模型", variant="secondary")
+                admin_status = gr.Markdown("普通用户无需使用此功能。")
+                admin_run.click(admin_switch_model, inputs=[admin_model, admin_token],
+                                outputs=admin_status, api_visibility="private", concurrency_limit=1)
         with gr.Column(scale=5):
             gallery = gr.Gallery(label="结果", columns=2, height=500,
                                  show_label=True, preview=True)
