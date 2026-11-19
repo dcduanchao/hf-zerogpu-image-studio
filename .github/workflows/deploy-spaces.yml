@@ -40,3 +40,5 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python scripts/check_spaces.py
+      - name: Smoke-test OpenAI API from GitHub runner
+        run: python scripts/smoke_openai_routes.py
