@@ -6,39 +6,32 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+import spaces  # Import before torch/diffusers for ZeroGPU tensor patching.
 import gradio as gr
-import spaces
 import torch
 from PIL import Image
 from diffusers import AutoPipelineForText2Image
 from models.z_image import ZImageModel
 from models.moss_image import MossImageModel, DEFAULT_NEGATIVE, gpu_duration
 
-Z_MODEL_ID = os.getenv("Z_MODEL_ID", "Tongyi-MAI/Z-Image-Turbo")
-SDXL_MODEL_ID = os.getenv("SDXL_MODEL_ID", "stabilityai/sdxl-turbo")
-ENABLE_SDXL = os.getenv("ENABLE_SDXL", "0") == "1"
+# ZeroGPU rehydrates every CUDA-registered weight tensor for each GPU worker.
+# Two 5B-class pipelines do not fit together in the available GPU memory.
+# Keep the plugins in this Space but load exactly one model at startup.
+ACTIVE_GPU_MODEL = os.getenv("ACTIVE_GPU_MODEL", "z-image-turbo").strip().lower()
+if ACTIVE_GPU_MODEL not in ("z-image-turbo", "moss-image"):
+    raise RuntimeError("ACTIVE_GPU_MODEL must be z-image-turbo or moss-image")
 
-# Keep Z-Image available even if optional MOSS initialization fails.
-z_image = ZImageModel()
-z_image.load()
+z_image = None
 moss_image = None
 moss_error = None
-if os.getenv("ENABLE_MOSS", "1") == "1":
-    try:
-        moss_image = MossImageModel()
-        moss_image.load()
-        print("MOSS plugin loaded successfully", flush=True)
-    except Exception as exc:
-        moss_image = None
-        moss_error = type(exc).__name__
-        print(f"MOSS plugin unavailable: {moss_error}; Z-Image remains enabled", flush=True)
-
-sdxl_txt = None
-if ENABLE_SDXL:
-    sdxl_txt = AutoPipelineForText2Image.from_pretrained(
-        SDXL_MODEL_ID, torch_dtype=torch.float16, variant="fp16"
-    )
-    sdxl_txt.to("cuda")
+sdxl_txt = None  # SDXL is intentionally disabled in single-model mode.
+if ACTIVE_GPU_MODEL == "z-image-turbo":
+    z_image = ZImageModel()
+    z_image.load()
+else:
+    moss_image = MossImageModel()
+    moss_image.load()
+print(f"Active ZeroGPU model: {ACTIVE_GPU_MODEL}", flush=True)
 
 ALLOWED_SIZES = {(512, 512), (768, 768), (1024, 1024), (1024, 768), (768, 1024)}
 
@@ -83,7 +76,7 @@ def infer(model: str, prompt: str, width: int, height: int,
         gpu_start = time.perf_counter()
         try:
             with torch.inference_mode():
-                if model == "z-image-turbo":
+                if model == "z-image-turbo" and z_image is not None:
                     options = dict(
                         prompt=prompt, num_inference_steps=8,
                         guidance_scale=0.0, generator=generator,
@@ -101,7 +94,7 @@ def infer(model: str, prompt: str, width: int, height: int,
                         generator=generator,
                     ).images[0]
                 else:
-                    raise gr.Error("模型不存在或未启用")
+                    raise gr.Error(f"当前 ZeroGPU 只加载了 {ACTIVE_GPU_MODEL}，请先切换 ACTIVE_GPU_MODEL 并重启 Space")
         finally:
             # If CUDA itself failed, leave the original inference error intact.
             try:
@@ -153,7 +146,7 @@ def infer_moss(prompt: str, negative_prompt: str, width: int, height: int,
     status = "error"
     try:
         if moss_image is None:
-            raise gr.Error(f"MOSS 模型未加载成功：{moss_error or 'disabled'}")
+            raise gr.Error(f"MOSS 当前未加载；活动模型是 {ACTIVE_GPU_MODEL}。请切换 ACTIVE_GPU_MODEL 并重启 Space")
         prompt = str(prompt or "").strip()
         if not prompt or len(prompt) > 4000:
             raise gr.Error("请输入 1～4000 字的提示词")
@@ -202,8 +195,8 @@ with gr.Blocks(title="ZeroGPU Image Engine") as demo:
     gr.Markdown("# ZeroGPU Image Engine\n此 Space 提供 GPU 推理 API。请从独立 UI Space 调用。")
     with gr.Row():
         model = gr.Dropdown(
-            choices=["z-image-turbo"] + (["sdxl-turbo"] if ENABLE_SDXL else []),
-            value="z-image-turbo", label="模型",
+            choices=[ACTIVE_GPU_MODEL],
+            value=ACTIVE_GPU_MODEL, label="模型",
         )
         prompt = gr.Textbox(label="提示词", value="一只可爱的宇航员猫在月球上")
     with gr.Row():
