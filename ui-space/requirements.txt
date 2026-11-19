@@ -1,2 +1,5 @@
 gradio_client>=1.13,<3
 Pillow
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
