@@ -12,7 +12,6 @@ class ModelSpec:
     can_edit: bool = False
 
 Z_SPACE = os.getenv("GPU_SPACE_ID", "duan0320/my-zerogpu-engine").strip()
-MOSS_SPACE = Z_SPACE
 
 MODELS = {
     "z-image-turbo": ModelSpec(
@@ -21,7 +20,7 @@ MODELS = {
         "512x512", True,
     ),
     "moss-image": ModelSpec(
-        "moss-image", "MOSS-Image (Multi-LoRA)", MOSS_SPACE,
+        "moss-image", "MOSS-Image (Multi-LoRA)", Z_SPACE,
         ("512x512", "768x768", "1024x1024", "1024x768", "768x1024",
          "576x1024", "1024x576", "864x1536", "1536x864"),
         "1024x1024", False,

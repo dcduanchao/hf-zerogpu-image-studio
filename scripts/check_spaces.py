@@ -1,7 +1,6 @@
 """Read-only deployment status check. Never prints secrets or triggers GPU jobs."""
 import os
 import json
-import time
 import urllib.request
 import urllib.error
 

@@ -1,7 +1,4 @@
-"""Adapter for public asrarkhann112/moss-image-nsfw-lora Space (/generate).
-
-API inspected on 2026-11-19; this external API may change without notice.
-"""
+"""MOSS adapter for the unified ZeroGPU /infer_moss endpoint."""
 import secrets
 
 NEGATIVE_PROMPT = (

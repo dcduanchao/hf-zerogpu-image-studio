@@ -1,11 +1,9 @@
 """OpenAI Images-compatible subset; deploy on trusted CPU host (NOT ZeroGPU)."""
 import base64
 import io
-import os
 import re
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 from typing import Literal
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile

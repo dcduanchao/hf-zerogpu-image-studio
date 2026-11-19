@@ -1,5 +1,4 @@
 import re
-from pathlib import Path
 
 import gradio as gr
 from huggingface_hub import HfApi
@@ -77,19 +76,6 @@ def generate(mode, model_label, prompt, source, size_label, count, strength, see
         return images, "部分图片已生成，后续失败：" + friendly_error(exc)
 
     return images, "\n".join(messages)
-
-
-def on_model_change(model_label):
-    spec = get_model(MODEL_NAMES[model_label])
-    return (
-        gr.update(choices=[SIZE_LABEL(v) for v in spec.sizes],
-                  value=SIZE_LABEL(spec.default_size)),
-        gr.update(value="文生图"),
-        gr.update(visible=False),
-        gr.update(visible=False),
-        gr.update(value=(f"当前模型：{spec.name} · "
-                         f"{'支持文生图和图片编辑' if spec.can_edit else '仅支持文生图'}")),
-    )
 
 
 def refresh_active_model():
