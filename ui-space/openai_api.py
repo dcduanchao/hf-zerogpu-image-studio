@@ -10,23 +10,14 @@ from typing import Literal
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-from gradio_client import Client, handle_file
+from model_registry import MODELS, get_model
+from model_router import generate as route_generate, image_url, local_image_path
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
-SPACE_ID = os.getenv("GPU_SPACE_ID", "").strip()
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_PIXELS = 16_000_000
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
-SIZE_MAP = {
-    "512x512": (512, 512), "768x768": (768, 768),
-    "1024x1024": (1024, 1024), "1024x768": (1024, 768),
-    "768x1024": (768, 1024),
-}
-MODELS = {
-    "z-image-turbo": {"edit": True},
-    "sdxl-turbo": {"edit": False},
-}
 
 app = FastAPI(title="ZeroGPU OpenAI-Compatible Images API")
 
@@ -69,15 +60,19 @@ def credentials(authorization: str | None, x_hf_token: str | None):
 
 
 def validate(model, size, n, edit=False):
-    if model not in MODELS:
-        raise api_error(400, "model_not_found", "不支持该模型")
-    if edit and not MODELS[model]["edit"]:
+    try:
+        spec = get_model(model)
+    except ValueError:
+        raise api_error(400, "model_not_found", "不支持该模型") from None
+    except RuntimeError:
+        raise api_error(503, "model_not_configured", "模型服务未配置") from None
+    if edit and not spec.can_edit:
         raise api_error(400, "unsupported_edit", "该模型不支持图片编辑")
-    if size not in SIZE_MAP:
-        raise api_error(400, "invalid_size", f"尺寸仅支持：{', '.join(SIZE_MAP)}")
+    if size not in spec.sizes:
+        raise api_error(400, "invalid_size", f"该模型支持尺寸：{', '.join(spec.sizes)}")
     if not 1 <= int(n) <= 4:
         raise api_error(400, "invalid_n", "n 必须为 1~4")
-    return SIZE_MAP[size]
+    return tuple(map(int, size.split("x")))
 
 
 def classify_error(exc):
@@ -101,46 +96,23 @@ def to_base64(path):
     return base64.b64encode(out.getvalue()).decode("ascii")
 
 
-def get_remote_image_url(result):
-    """Extract Gradio's existing temporary file URL without downloading or rehosting."""
-    if isinstance(result, dict):
-        url = result.get("url")
-    else:
-        url = getattr(result, "url", None)
-    if not isinstance(url, str) or not url:
-        raise api_error(502, "missing_image_url", "GPU Space 未返回可访问的图片 URL")
-    parsed = urlparse(url)
-    # Only return direct URLs hosted by the configured Space.
-    expected_host = SPACE_ID.replace("/", "-").lower() + ".hf.space"
-    if parsed.scheme != "https" or (parsed.hostname or "").lower() != expected_host:
-        raise api_error(502, "invalid_image_url", "GPU Space 返回的图片地址不安全或不受支持")
-    return url
-
-
 def predict(model, prompt, size, n, token, image_path=None, strength=0.6,
             seed=-1, response_format="url"):
-    if not SPACE_ID or "/" not in SPACE_ID:
-        raise api_error(503, "not_configured", "请设置 GPU_SPACE_ID 环境变量")
     width, height = validate(model, size, n, edit=image_path is not None)
     if response_format not in ("url", "b64_json"):
         raise api_error(400, "unsupported_format", "仅支持 url 或 b64_json")
     try:
-        client = Client(
-            SPACE_ID,
-            token=token if token else False,
-            download_files=False if response_format == "url" else "/tmp/gradio",
-        )
         data = []
         for _ in range(n):
-            result, _meta = client.predict(
-                model, prompt, width, height,
-                handle_file(str(image_path)) if image_path else None,
-                float(strength), int(seed), api_name="/infer",
+            image, _meta = route_generate(
+                model, prompt, width, height, seed=seed, token=token,
+                image_path=image_path, strength=strength,
+                download_files=response_format == "b64_json",
             )
             if response_format == "url":
-                data.append({"url": get_remote_image_url(result)})
+                data.append({"url": image_url(image, model)})
             else:
-                data.append({"b64_json": to_base64(result)})
+                data.append({"b64_json": to_base64(local_image_path(image))})
     except HTTPException:
         raise
     except Exception as exc:
@@ -150,13 +122,15 @@ def predict(model, prompt, size, n, token, image_path=None, strength=0.6,
 
 @app.get("/health")
 def health():
-    return {"ok": True, "configured": bool(SPACE_ID)}
+    return {"ok": True, "configured": all(bool(m.space_id) for m in MODELS.values())}
 
 
 @app.get("/v1/models")
 def models():
     return {"object": "list", "data": [
-        {"id": name, "object": "model", "owned_by": "huggingface"} for name in MODELS
+        {"id": name, "object": "model", "owned_by": spec.space_id, "name": spec.name,
+         "sizes": list(spec.sizes), "supports_edits": spec.can_edit}
+        for name, spec in MODELS.items()
     ]}
 
 
