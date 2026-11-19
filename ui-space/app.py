@@ -1,16 +1,14 @@
-import os
 import re
 from pathlib import Path
 
 import gradio as gr
-from gradio_client import Client, handle_file
 from huggingface_hub import HfApi
+from model_registry import MODELS, display_names, get_model
+from model_router import generate as route_generate, local_image_path
 
-SPACE_ID = os.environ.get("GPU_SPACE_ID", "").strip()
-MODEL_NAMES = {"Z-Image-Turbo": "z-image-turbo", "SDXL-Turbo": "sdxl-turbo"}
-SIZE_MAP = {"512 × 512": (512, 512), "768 × 768": (768, 768),
-            "1024 × 1024": (1024, 1024), "1024 × 768": (1024, 768),
-            "768 × 1024": (768, 1024)}
+MODEL_NAMES = display_names()
+SIZE_LABEL = lambda size: size.replace("x", " × ")
+SIZE_MAP = {SIZE_LABEL(size): size for spec in MODELS.values() for size in spec.sizes}
 
 
 def friendly_error(exc):
@@ -27,19 +25,21 @@ def friendly_error(exc):
 
 def generate(mode, model_label, prompt, source, size_label, count, strength, seed, token,
              request: gr.Request):
-    if not SPACE_ID or "/" not in SPACE_ID:
-        raise gr.Error("请先设置 UI Space 变量 GPU_SPACE_ID=用户名/GPU-Space名")
     prompt = (prompt or "").strip()
     if not prompt or len(prompt) > 4000:
         raise gr.Error("请输入 1～4000 字的提示词")
     model = MODEL_NAMES[model_label]
+    spec = get_model(model)
     if mode == "图片编辑" and not source:
         raise gr.Error("图片编辑模式需要上传原图")
-    if mode == "图片编辑" and model != "z-image-turbo":
-        raise gr.Error("当前只有 Z-Image-Turbo 支持图片编辑")
-    width, height = SIZE_MAP[size_label]
+    if mode == "图片编辑" and not spec.can_edit:
+        raise gr.Error(f"{spec.name} 当前不支持图片编辑")
+    size = SIZE_MAP[size_label]
+    if size not in spec.sizes:
+        raise gr.Error(f"{spec.name} 不支持尺寸 {size}")
+    width, height = map(int, size.split("x"))
     count = int(count)
-    if count not in [1, 2, 3, 4]:
+    if count < 1 or count > 4:
         raise gr.Error("最多生成 4 张")
     token = (token or "").strip()
     if token and not re.fullmatch(r"hf_[A-Za-z0-9]+", token):
@@ -54,24 +54,34 @@ def generate(mode, model_label, prompt, source, size_label, count, strength, see
     images = []
     messages = []
     try:
-        client = Client(SPACE_ID, token=token if token else False, headers=headers)
         for idx in range(count):
-            img_arg = handle_file(source) if mode == "图片编辑" else None
-            result_path, meta = client.predict(
-                model, prompt, width, height, img_arg,
-                float(strength), int(seed) if int(seed) >= 0 else -1,
-                api_name="/infer",
+            result, meta = route_generate(
+                model, prompt, width, height,
+                seed=int(seed) if seed is not None else -1, token=token or None,
+                image_path=source if mode == "图片编辑" else None,
+                strength=strength, download_files=True, headers=headers,
             )
-            if not Path(result_path).is_file():
-                raise RuntimeError("GPU Space 未返回本地图片文件")
-            images.append((result_path, f"第 {idx+1} 张 · {model}"))
+            images.append((local_image_path(result), f"第 {idx+1} 张 · {spec.name}"))
             messages.append(meta)
     except Exception as exc:
         if not images:
             raise gr.Error(friendly_error(exc)) from None
-        return images, "已生成部分图片，后续任务未完成：" + friendly_error(exc)
+        return images, "部分图片已生成，后续失败：" + friendly_error(exc)
 
     return images, "\n".join(messages)
+
+
+def on_model_change(model_label):
+    spec = get_model(MODEL_NAMES[model_label])
+    return (
+        gr.update(choices=[SIZE_LABEL(v) for v in spec.sizes],
+                  value=SIZE_LABEL(spec.default_size)),
+        gr.update(value="文生图"),
+        gr.update(visible=False),
+        gr.update(visible=False),
+        gr.update(value=(f"当前模型：{spec.name} · "
+                         f"{'支持文生图和图片编辑' if spec.can_edit else '仅支持文生图'}")),
+    )
 
 
 def token_info(token):
@@ -98,8 +108,9 @@ with gr.Blocks(title="AI 图片工作室") as demo:
                                 placeholder="描述你想生成的画面，或者说明如何修改原图……")
             source = gr.Image(type="filepath", label="上传原图（图片编辑使用）", visible=False)
             with gr.Row():
-                model = gr.Dropdown(list(MODEL_NAMES), value="Z-Image-Turbo", label="模型")
-                size = gr.Dropdown(list(SIZE_MAP), value="512 × 512", label="尺寸")
+                model = gr.Dropdown(list(MODEL_NAMES), value=MODELS["z-image-turbo"].name, label="模型")
+                size = gr.Dropdown([SIZE_LABEL(v) for v in MODELS["z-image-turbo"].sizes],
+                                   value="512 × 512", label="尺寸")
             with gr.Row():
                 count = gr.Slider(1, 4, 1, step=1, label="生成数量")
                 seed = gr.Number(-1, precision=0, label="Seed（-1 随机）")
@@ -112,11 +123,15 @@ with gr.Blocks(title="AI 图片工作室") as demo:
                 status = gr.Markdown("匿名模式：共享额度；耗尽则直接返回错误。")
                 check.click(token_info, inputs=token, outputs=status, api_visibility="private")
                 gr.Markdown("Token 仅用于本次请求，禁止记录到日志；使用你信任的 Space。")
+            model_info = gr.Markdown("当前模型：Z-Image Turbo · 支持文生图和图片编辑")
             run = gr.Button("开始生成", variant="primary")
         with gr.Column(scale=5):
             gallery = gr.Gallery(label="结果", columns=2, height=500,
                                  show_label=True, preview=True)
             info = gr.Textbox(label="执行信息", lines=3)
+    model.change(on_model_change, inputs=model,
+                 outputs=[size, mode, source, strength, model_info],
+                 api_visibility="private")
     mode.change(
         lambda value: (gr.update(visible=value == "图片编辑"),
                        gr.update(visible=value == "图片编辑")),
