@@ -10,16 +10,28 @@ import gradio as gr
 import spaces
 import torch
 from PIL import Image
-from diffusers import ZImagePipeline, ZImageImg2ImgPipeline, AutoPipelineForText2Image
+from diffusers import AutoPipelineForText2Image
+from models.z_image import ZImageModel
+from models.moss_image import MossImageModel, DEFAULT_NEGATIVE, gpu_duration
 
 Z_MODEL_ID = os.getenv("Z_MODEL_ID", "Tongyi-MAI/Z-Image-Turbo")
 SDXL_MODEL_ID = os.getenv("SDXL_MODEL_ID", "stabilityai/sdxl-turbo")
 ENABLE_SDXL = os.getenv("ENABLE_SDXL", "0") == "1"
 
-# ZeroGPU handles CUDA through its GPU decorator and module-load placement.
-z_txt = ZImagePipeline.from_pretrained(Z_MODEL_ID, dtype=torch.bfloat16)
-z_txt.to("cuda")
-z_edit = ZImageImg2ImgPipeline.from_pipe(z_txt)
+# Keep Z-Image available even if optional MOSS initialization fails.
+z_image = ZImageModel()
+z_image.load()
+moss_image = None
+moss_error = None
+if os.getenv("ENABLE_MOSS", "1") == "1":
+    try:
+        moss_image = MossImageModel()
+        moss_image.load()
+        print("MOSS plugin loaded successfully", flush=True)
+    except Exception as exc:
+        moss_image = None
+        moss_error = type(exc).__name__
+        print(f"MOSS plugin unavailable: {moss_error}; Z-Image remains enabled", flush=True)
 
 sdxl_txt = None
 if ENABLE_SDXL:
@@ -77,12 +89,9 @@ def infer(model: str, prompt: str, width: int, height: int,
                         guidance_scale=0.0, generator=generator,
                     )
                     if source_image is None:
-                        image = z_txt(width=width, height=height, **options).images[0]
+                        image = z_image.generate(prompt, width, height, seed)
                     else:
-                        image = z_edit(
-                            image=source_image.convert("RGB").resize((width, height)),
-                            strength=float(strength), **options,
-                        ).images[0]
+                        image = z_image.generate(prompt, width, height, seed, source_image, strength)
                 elif model == "sdxl-turbo" and sdxl_txt is not None:
                     if source_image is not None:
                         raise gr.Error("SDXL-Turbo 当前仅支持文生图")
@@ -132,6 +141,62 @@ def infer(model: str, prompt: str, width: int, height: int,
         # No HF tokens, uploaded image contents or full prompts in logs.
         print(json.dumps(record, ensure_ascii=False, default=str), flush=True)
 
+@spaces.GPU(duration=gpu_duration)
+def infer_moss(prompt: str, negative_prompt: str, width: int, height: int,
+               steps: int, guidance_scale: float, lora_scale: float,
+               realistic_scale: float, add_trigger: bool, seed: int):
+    """Separate decorated endpoint allows per-model reservation duration."""
+    request_id = uuid.uuid4().hex[:12]
+    started = time.perf_counter()
+    gpu_seconds = None
+    error_type = None
+    status = "error"
+    try:
+        if moss_image is None:
+            raise gr.Error(f"MOSS 模型未加载成功：{moss_error or 'disabled'}")
+        prompt = str(prompt or "").strip()
+        if not prompt or len(prompt) > 4000:
+            raise gr.Error("请输入 1～4000 字的提示词")
+        width, height = int(width), int(height)
+        if not (512 <= width <= 1536 and 512 <= height <= 1536):
+            raise gr.Error("MOSS 尺寸必须在 512 到 1536 之间")
+        seed = int(seed)
+        if seed < 0:
+            seed = int(torch.randint(0, 2**31 - 1, (1,)).item())
+        torch.cuda.synchronize()
+        gpu_start = time.perf_counter()
+        try:
+            image = moss_image.generate(
+                prompt, negative_prompt, width, height, steps,
+                guidance_scale, lora_scale, realistic_scale, add_trigger, seed,
+            )
+        finally:
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+            gpu_seconds = time.perf_counter() - gpu_start
+        path = os.path.join(tempfile.mkdtemp(prefix="moss_"), "image.png")
+        image.save(path, format="PNG")
+        status = "success"
+        return path, f"model=moss-image | seed={seed} | gpu_infer={gpu_seconds:.2f}s"
+    except Exception as exc:
+        error_type = type(exc).__name__
+        raise
+    finally:
+        record = {
+            "event": "gpu_infer",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "request_id": request_id,
+            "model": "moss-image",
+            "status": status,
+            "gpu_infer_seconds": round(gpu_seconds, 3) if gpu_seconds is not None else None,
+            "total_seconds": round(time.perf_counter() - started, 3),
+        }
+        if error_type:
+            record["error_type"] = error_type
+        print(json.dumps(record, ensure_ascii=False), flush=True)
+
 
 with gr.Blocks(title="ZeroGPU Image Engine") as demo:
     gr.Markdown("# ZeroGPU Image Engine\n此 Space 提供 GPU 推理 API。请从独立 UI Space 调用。")
@@ -150,11 +215,27 @@ with gr.Blocks(title="ZeroGPU Image Engine") as demo:
     run = gr.Button("生成", variant="primary")
     output_image = gr.Image(type="filepath", label="生成结果")
     output_info = gr.Textbox(label="运行信息")
+    with gr.Accordion("MOSS-Image 参数（MOSS API）", open=False):
+        moss_negative = gr.Textbox(value=DEFAULT_NEGATIVE, label="Negative prompt")
+        moss_steps = gr.Slider(1, 50, value=30, step=1, label="Steps")
+        moss_cfg = gr.Slider(1, 7, value=3, label="CFG")
+        moss_lora = gr.Slider(0, 1.5, value=0.7, label="LoRA scale")
+        moss_realistic = gr.Slider(0, 2, value=1, label="Realistic scale")
+        moss_trigger = gr.Checkbox(value=True, label="Add moss_xvstyle trigger")
     run.click(
         fn=infer,
         inputs=[model, prompt, width, height, source_image, strength, seed],
         outputs=[output_image, output_info],
         api_name="infer",
+        concurrency_limit=1,
+    )
+    moss_run = gr.Button("MOSS 生成", variant="secondary")
+    moss_run.click(
+        fn=infer_moss,
+        inputs=[prompt, moss_negative, width, height, moss_steps, moss_cfg,
+                moss_lora, moss_realistic, moss_trigger, seed],
+        outputs=[output_image, output_info],
+        api_name="infer_moss",
         concurrency_limit=1,
     )
 
