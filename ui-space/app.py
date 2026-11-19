@@ -130,4 +130,14 @@ with gr.Blocks(title="AI 图片工作室", css=CSS) as demo:
     )
 
 demo.queue(default_concurrency_limit=4)
-demo.launch()
+
+# Serve both the Gradio UI (/) and OpenAI-style Images API (/v1/images/*)
+# from the same CPU Basic Space, on a single port.
+import uvicorn
+from openai_api import app as api_app
+
+application = gr.mount_gradio_app(api_app, demo, path="/")
+
+if __name__ == "__main__":
+    uvicorn.run(application, host="0.0.0.0", port=7860, workers=1)
+
