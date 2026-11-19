@@ -25,6 +25,8 @@ def generate(client, prompt, width, height, seed, image_path=None, strength=0.6)
         realistic_scale=1.0,
         add_trigger=True,
         seed=actual_seed,
-        api_name="/generate",
+        api_name="/infer_moss",
     )
-    return result, f"model=moss-image | seed={actual_seed} | provider=self-hosted"
+    if not isinstance(result, (list, tuple)) or len(result) != 2:
+        raise RuntimeError("MOSS 统一 GPU 接口响应格式异常")
+    return result[0], str(result[1])
