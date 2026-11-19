@@ -5,6 +5,7 @@ import os
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Literal
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -35,7 +36,7 @@ class GenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     size: str = "512x512"
     n: int = Field(default=1, ge=1, le=4)
-    response_format: Literal["b64_json"] = "b64_json"
+    response_format: Literal["url", "b64_json"] = "url"
     seed: int = -1
 
 
@@ -100,12 +101,35 @@ def to_base64(path):
     return base64.b64encode(out.getvalue()).decode("ascii")
 
 
-def predict(model, prompt, size, n, token, image_path=None, strength=0.6, seed=-1):
+def get_remote_image_url(result):
+    """Extract Gradio's existing temporary file URL without downloading or rehosting."""
+    if isinstance(result, dict):
+        url = result.get("url")
+    else:
+        url = getattr(result, "url", None)
+    if not isinstance(url, str) or not url:
+        raise api_error(502, "missing_image_url", "GPU Space 未返回可访问的图片 URL")
+    parsed = urlparse(url)
+    # Only return direct URLs hosted by the configured Space.
+    expected_host = SPACE_ID.replace("/", "-").lower() + ".hf.space"
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != expected_host:
+        raise api_error(502, "invalid_image_url", "GPU Space 返回的图片地址不安全或不受支持")
+    return url
+
+
+def predict(model, prompt, size, n, token, image_path=None, strength=0.6,
+            seed=-1, response_format="url"):
     if not SPACE_ID or "/" not in SPACE_ID:
         raise api_error(503, "not_configured", "请设置 GPU_SPACE_ID 环境变量")
     width, height = validate(model, size, n, edit=image_path is not None)
+    if response_format not in ("url", "b64_json"):
+        raise api_error(400, "unsupported_format", "仅支持 url 或 b64_json")
     try:
-        client = Client(SPACE_ID, token=token if token else False)
+        client = Client(
+            SPACE_ID,
+            token=token if token else False,
+            download_files=False if response_format == "url" else "/tmp/gradio",
+        )
         data = []
         for _ in range(n):
             result, _meta = client.predict(
@@ -113,7 +137,10 @@ def predict(model, prompt, size, n, token, image_path=None, strength=0.6, seed=-
                 handle_file(str(image_path)) if image_path else None,
                 float(strength), int(seed), api_name="/infer",
             )
-            data.append({"b64_json": to_base64(result)})
+            if response_format == "url":
+                data.append({"url": get_remote_image_url(result)})
+            else:
+                data.append({"b64_json": to_base64(result)})
     except HTTPException:
         raise
     except Exception as exc:
@@ -138,7 +165,7 @@ def generate_images(req: GenerateRequest,
                     authorization: str | None = Header(default=None),
                     x_hf_token: str | None = Header(default=None)):
     token = credentials(authorization, x_hf_token)
-    return predict(req.model, req.prompt, req.size, req.n, token, seed=req.seed)
+    return predict(req.model, req.prompt, req.size, req.n, token, seed=req.seed,\n                   response_format=req.response_format)
 
 
 @app.post("/v1/images/edits")
@@ -149,6 +176,7 @@ async def edit_images(
     size: str = Form("512x512"),
     n: int = Form(1),
     strength: float = Form(0.6),
+    response_format: Literal["url", "b64_json"] = Form("url"),
     authorization: str | None = Header(default=None),
     x_hf_token: str | None = Header(default=None),
 ):
@@ -170,6 +198,6 @@ async def edit_images(
             with tempfile.TemporaryDirectory(prefix="image_gateway_") as folder:
                 filename = Path(folder) / "source.png"
                 img.convert("RGB").save(filename, "PNG")
-                return predict(model, prompt, size, n, token, image_path=filename, strength=strength)
+                return predict(model, prompt, size, n, token, image_path=filename,\n                               strength=strength, response_format=response_format)
     except (UnidentifiedImageError, ValueError, OSError):
         raise api_error(400, "invalid_image", "上传的图片不能读取") from None
