@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py openai_api.py model_registry.py model_router.py admin_switch.py ./
+COPY app.py openai_api.py model_registry.py model_router.py model_state.py admin_switch.py ./
 COPY model_adapters/ ./model_adapters/
 
 EXPOSE 7860
