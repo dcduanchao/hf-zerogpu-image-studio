@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from gradio_client import Client
 
 from model_registry import get_model
+from model_state import require_active_model
 
 ADAPTERS = {
     "z-image-turbo": "model_adapters.z_image",
@@ -26,6 +27,7 @@ def _client(model_id, token=None, *, download_files=True, headers=None):
 def generate(model_id, prompt, width, height, seed=-1, token=None,
              image_path=None, strength=0.6, download_files=True, headers=None):
     model = get_model(model_id)
+    require_active_model(model_id)
     if image_path is not None and not model.can_edit:
         raise ValueError(f"{model.name} 当前不支持图片编辑")
     adapter = importlib.import_module(ADAPTERS[model_id])
