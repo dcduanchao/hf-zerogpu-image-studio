@@ -84,7 +84,7 @@ Keep `gpu-space/README.md` and `ui-space/README.md`: their YAML front matter is 
 
 ```bash
 python -m compileall -q gpu-space ui-space scripts
-python -m pip install 'huggingface_hub>=0.34,<2' 'gradio_client>=1.13,<3'
+python -m pip install 'huggingface_hub>=2.1.1,<3' 'gradio_client>=1.13,<3'
 python scripts/test_admin_switch.py
 python scripts/test_model_state.py
 ```
@@ -116,6 +116,11 @@ On Windows PowerShell, use the appropriate venv activation command and `$env:GPU
 6. **Owner-only switching**: expand **“管理员 · 切换 GPU 模型（仅所有者）”**, select a model, supply the owner's write-enabled HF Token, and submit. When the GPU Space has restarted, click **“刷新当前模型状态”** to refresh the page. Other visitors cannot bypass this server-side authorization by calling Gradio directly.
 
 The owner/admin token is privileged: use it only in a trusted UI. No privileged token is passed as an inference parameter; visitor calls never silently fall back to the deployment token.
+
+
+### Check your personal ZeroGPU time remaining
+
+In the **Hugging Face Token** panel, enter your own visitor token and select **“验证 Token / 查询 ZeroGPU 剩余时间”** (Verify Token / Check remaining ZeroGPU time). The UI shows the verified username, quota remaining, base quota, and reset time (UTC) as returned by Hugging Face. It calls `HfApi.get_zero_gpu_quota()`, available in `huggingface_hub>=2.1.1`. Fine-grained tokens require the **Billing → Read billing usage and payment method status** permission. When quota lookup fails, the app keeps the successful identity validation and clearly reports that quota is unavailable. Remaining GPU-seconds are *not* a guarantee of uninterrupted inference time. Anonymous users cannot query personal remaining time.
 
 ## 6. OpenAI-compatible Images API
 

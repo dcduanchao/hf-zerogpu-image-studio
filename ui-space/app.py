@@ -2,6 +2,7 @@ import re
 
 import gradio as gr
 from huggingface_hub import HfApi
+from token_quota import token_quota_info
 from model_registry import MODELS, display_names, get_model
 from model_router import generate as route_generate, local_image_path
 from admin_switch import SwitchDenied, switch_active_model
@@ -104,14 +105,7 @@ def refresh_active_model():
 
 
 def token_info(token):
-    token = (token or "").strip()
-    if not token:
-        return "匿名模式：使用共享匿名额度（不保证独立额度）。"
-    try:
-        identity = HfApi(token=token).whoami()
-        return f"Token 有效：{identity.get('name', 'HF 用户')}；将按该账号配额调度。"
-    except Exception:
-        return "Token 验证失败；请检查权限和内容。"
+    return token_quota_info(token)
 
 
 def admin_switch_model(model_label, admin_token):
@@ -147,7 +141,7 @@ with gr.Blocks(title="AI 图片工作室") as demo:
             with gr.Accordion("Hugging Face Token（可选）", open=True):
                 token = gr.Textbox(label="HF Token", type="password",
                                    placeholder="留空匿名；填写 hf_... 计入你的账号额度")
-                check = gr.Button("验证 Token", size="sm")
+                check = gr.Button("验证 Token / 查询 ZeroGPU 剩余时间", size="sm")
                 status = gr.Markdown("匿名模式：共享额度；耗尽则直接返回错误。")
                 check.click(token_info, inputs=token, outputs=status, api_visibility="private")
                 gr.Markdown("Token 仅用于本次请求，禁止记录到日志；使用你信任的 Space。")
