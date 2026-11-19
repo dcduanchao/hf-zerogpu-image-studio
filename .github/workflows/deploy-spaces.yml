@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'gpu-space/**'
+      - 'moss-space/**'
       - 'ui-space/**'
       - 'scripts/deploy_spaces.py'
       - 'scripts/smoke_openai_routes.py'
@@ -27,16 +28,17 @@ jobs:
       HF_NAMESPACE: ${{ vars.HF_NAMESPACE }}
       GPU_SPACE_NAME: ${{ vars.GPU_SPACE_NAME || 'my-zerogpu-engine' }}
       UI_SPACE_NAME: ${{ vars.UI_SPACE_NAME || 'my-image-studio' }}
+      MOSS_SPACE_NAME: ${{ vars.MOSS_SPACE_NAME || 'my-moss-image-engine' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Check Python syntax before publishing
-        run: python -m compileall -q gpu-space ui-space gateway scripts tests
+        run: python -m compileall -q gpu-space moss-space ui-space gateway scripts tests
       - name: Install deployment client
         run: python -m pip install 'huggingface_hub>=0.34,<2'
-      - name: Publish both Gradio Spaces
+      - name: Publish GPU, MOSS and UI Spaces
         run: python scripts/deploy_spaces.py
       - name: Check Hugging Face Space build status
         if: always()
