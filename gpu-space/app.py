@@ -223,6 +223,17 @@ with gr.Blocks(title="ZeroGPU Image Engine") as demo:
         concurrency_limit=1,
     )
     moss_run = gr.Button("MOSS 生成", variant="secondary")
+    # Read-only API: gives CPU UI and OpenAI gateway the *loaded* model,
+    # rather than the future desired value in Hub environment variables.
+    status_btn = gr.Button(visible=False)
+    active_model_output = gr.Textbox(visible=False)
+    status_btn.click(
+        fn=lambda: ACTIVE_GPU_MODEL,
+        inputs=[],
+        outputs=active_model_output,
+        api_name="active_model",
+        concurrency_limit=1,
+    )
     moss_run.click(
         fn=infer_moss,
         inputs=[prompt, moss_negative, width, height, moss_steps, moss_cfg,
