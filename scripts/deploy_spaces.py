@@ -32,6 +32,7 @@ def main():
                           commit_message="Deploy from GitHub Actions")
     # Never touch existing ZeroGPU hardware settings.
     api.add_space_variable(repo_id=ui_id, key="GPU_SPACE_ID", value=gpu_id)
+    api.add_space_variable(repo_id=ui_id, key="HF_ADMIN_USERNAME", value=namespace)
     print(f"GPU: https://huggingface.co/spaces/{gpu_id}")
     print(f"UI: https://huggingface.co/spaces/{ui_id}")
     print("One CPU Space + one ZeroGPU Space; all model plugins share the GPU Space.")
