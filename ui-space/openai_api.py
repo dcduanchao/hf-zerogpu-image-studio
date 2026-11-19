@@ -12,6 +12,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from model_registry import MODELS, get_model
 from model_router import generate as route_generate, image_url, local_image_path
+from model_state import active_model_id, require_active_model, ModelMismatch, ModelUnavailable
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
@@ -66,6 +67,12 @@ def validate(model, size, n, edit=False):
         raise api_error(400, "model_not_found", "不支持该模型") from None
     except RuntimeError:
         raise api_error(503, "model_not_configured", "模型服务未配置") from None
+    try:
+        require_active_model(model)
+    except ModelMismatch as exc:
+        raise api_error(409, "model_not_active", str(exc)) from None
+    except ModelUnavailable as exc:
+        raise api_error(503, "gpu_model_unavailable", str(exc)) from None
     if edit and not spec.can_edit:
         raise api_error(400, "unsupported_edit", "该模型不支持图片编辑")
     if size not in spec.sizes:
@@ -115,6 +122,10 @@ def predict(model, prompt, size, n, token, image_path=None, strength=0.6,
                 data.append({"b64_json": to_base64(local_image_path(image))})
     except HTTPException:
         raise
+    except ModelMismatch as exc:
+        raise api_error(409, "model_not_active", str(exc)) from None
+    except ModelUnavailable as exc:
+        raise api_error(503, "gpu_model_unavailable", str(exc)) from None
     except Exception as exc:
         raise classify_error(exc) from None
     return {"created": int(time.time()), "data": data}
@@ -123,6 +134,15 @@ def predict(model, prompt, size, n, token, image_path=None, strength=0.6,
 @app.get("/health")
 def health():
     return {"ok": True, "configured": all(bool(m.space_id) for m in MODELS.values())}
+
+
+@app.get("/v1/models/active")
+def active_model():
+    try:
+        active = active_model_id()
+    except ModelUnavailable as exc:
+        raise api_error(503, "gpu_model_unavailable", str(exc)) from None
+    return {"model": active, "name": MODELS[active].name, "status": "ready"}
 
 
 @app.get("/v1/models")
