@@ -12,7 +12,6 @@ namespace = os.getenv("HF_NAMESPACE", "").strip() or api.whoami()["name"]
 spaces = [
     (namespace, os.getenv("GPU_SPACE_NAME", "my-zerogpu-engine")),
     (namespace, os.getenv("UI_SPACE_NAME", "my-image-studio")),
-    (namespace, os.getenv("MOSS_SPACE_NAME", "my-moss-image-engine")),
 ]
 
 for namespace, name in spaces:
