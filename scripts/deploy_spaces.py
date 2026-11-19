@@ -33,7 +33,16 @@ def main():
         api.upload_folder(repo_id=repo_id, repo_type="space",
                           folder_path=str(ROOT / directory),
                           commit_message="Deploy from GitHub Actions")
-    # Only request ZeroGPU on the new MOSS Space, never modify existing hardware.\n    try:\n        details = api.space_info(moss_id, expand=["runtime"])\n        current = getattr(getattr(details, "runtime", None), "hardware", None)\n        if current != "zero-a10g":\n            api.request_space_hardware(repo_id=moss_id, hardware="zero-a10g")\n            print("Requested ZeroGPU hardware for new MOSS Space")\n    except Exception as exc:\n        print(f"MOSS hardware auto-selection unavailable: {type(exc).__name__}; select ZeroGPU manually")\n    api.add_space_variable(repo_id=ui_id, key="GPU_SPACE_ID", value=gpu_id)
+    # Only request ZeroGPU on the new MOSS Space, never modify existing hardware.
+    try:
+        details = api.space_info(moss_id, expand=["runtime"])
+        current = getattr(getattr(details, "runtime", None), "hardware", None)
+        if current != "zero-a10g":
+            api.request_space_hardware(repo_id=moss_id, hardware="zero-a10g")
+            print("Requested ZeroGPU hardware for new MOSS Space")
+    except Exception as exc:
+        print(f"MOSS hardware auto-selection unavailable: {type(exc).__name__}; select ZeroGPU manually")
+    api.add_space_variable(repo_id=ui_id, key="GPU_SPACE_ID", value=gpu_id)
     api.add_space_variable(repo_id=ui_id, key="MOSS_SPACE_ID", value=moss_id)
     print(f"GPU: https://huggingface.co/spaces/{gpu_id}")
     print(f"UI: https://huggingface.co/spaces/{ui_id}")
