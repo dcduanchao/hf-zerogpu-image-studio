@@ -12,7 +12,7 @@ class ModelSpec:
     can_edit: bool = False
 
 Z_SPACE = os.getenv("GPU_SPACE_ID", "duan0320/my-zerogpu-engine").strip()
-MOSS_SPACE = os.getenv("MOSS_SPACE_ID", "asrarkhann112/moss-image-nsfw-lora").strip()
+MOSS_SPACE = os.getenv("MOSS_SPACE_ID", "duan0320/my-moss-image-engine").strip()
 
 MODELS = {
     "z-image-turbo": ModelSpec(
