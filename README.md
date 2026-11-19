@@ -44,7 +44,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 - `POST /v1/images/generations` with JSON `model`, `prompt`, `size`, `n`
 - `POST /v1/images/edits` with image multipart upload
 
-Returns `data[].b64_json` for supported image operations. This is an OpenAI-compatible subset, **not complete OpenAI Images API compatibility**.
+Returns `data[].url` by default, pointing to a temporary GPU Space image file. Use `response_format=b64_json` to request Base64 instead. This is an OpenAI-compatible subset, **not complete OpenAI Images API compatibility**.
 
 ## Limitations and safety
 
