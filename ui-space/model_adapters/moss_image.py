@@ -27,4 +27,4 @@ def generate(client, prompt, width, height, seed, image_path=None, strength=0.6)
         seed=actual_seed,
         api_name="/generate",
     )
-    return result, f"model=moss-image | seed={actual_seed} | provider=asrarkhann112"
+    return result, f"model=moss-image | seed={actual_seed} | provider=self-hosted"
