@@ -1,0 +1,35 @@
+name: Deploy MiniMax H3 GGUF ZeroGPU probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "experiments/minimax-h3-gguf-zerogpu/**"
+      - ".github/workflows/deploy-minimax-gguf-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-minimax-h3-gguf-probe
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_NAMESPACE: ${{ vars.HF_NAMESPACE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Python syntax check
+        run: python -m py_compile experiments/minimax-h3-gguf-zerogpu/app.py
+      - name: Install deployment SDK
+        run: python -m pip install 'huggingface_hub>=0.34,<2'
+      - name: Create ZeroGPU test Space and upload files
+        run: python scripts/deploy_minimax_gguf_probe.py
