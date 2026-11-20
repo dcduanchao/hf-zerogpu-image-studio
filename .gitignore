@@ -7,3 +7,26 @@ __pycache__/
 !.env.example
 *.log
 .DS_Store
+
+# JetBrains IDEs (IntelliJ IDEA / PyCharm)
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Python local tooling
+.venv*/
+venv/
+.envrc
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+htmlcov/
+
+# Local OS/editor temporary files
+Thumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
