@@ -3,6 +3,7 @@ import re
 import gradio as gr
 from huggingface_hub import HfApi
 from token_quota import token_quota_info
+from input_images import ImageInputError, MAX_BYTES, MAX_IMAGES, parse_urls, prepare_images, collage
 from model_registry import MODELS, display_names, get_model
 from model_router import generate as route_generate, local_image_path
 from admin_switch import SwitchDenied, switch_active_model
@@ -25,7 +26,7 @@ def friendly_error(exc):
     return "生成失败，请查看 GPU Space 的 Logs（不展示可能包含敏感数据的原始异常）。"
 
 
-def generate(mode, model_label, prompt, source, size_label, count, strength, seed, token,
+def generate(mode, model_label, prompt, source, image_urls, size_label, count, strength, seed, token,
              request: gr.Request):
     prompt = (prompt or "").strip()
     if not prompt or len(prompt) > 4000:
@@ -33,11 +34,13 @@ def generate(mode, model_label, prompt, source, size_label, count, strength, see
     model = MODEL_NAMES[model_label]
     try:
         require_active_model(model)
+    except ImageInputError as exc:
+        raise gr.Error(str(exc)) from None
     except (ModelMismatch, ModelUnavailable) as exc:
         raise gr.Error(str(exc)) from None
     spec = get_model(model)
-    if mode == "图片编辑" and not source:
-        raise gr.Error("图片编辑模式需要上传原图")
+    if mode == "图片编辑" and not source and not (image_urls or "").strip():
+        raise gr.Error("图片编辑需要上传图片或提供公共图片 URL")
     if mode == "图片编辑" and not spec.can_edit:
         raise gr.Error(f"{spec.name} 当前不支持图片编辑")
     size = SIZE_MAP[size_label]
@@ -60,16 +63,35 @@ def generate(mode, model_label, prompt, source, size_label, count, strength, see
     images = []
     messages = []
     try:
-        for idx in range(count):
-            result, meta = route_generate(
-                model, prompt, width, height,
-                seed=int(seed) if seed is not None else -1, token=token or None,
-                image_path=source if mode == "图片编辑" else None,
-                strength=strength, download_files=True, headers=headers,
-            )
-            images.append((local_image_path(result), f"第 {idx+1} 张 · {spec.name}"))
-            messages.append(meta)
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="image_ui_") as folder:
+            input_path = None
+            edit_mode = None
+            input_count = 0
+            if mode == "图片编辑":
+                files = source or []
+                urls = parse_urls(image_urls or "")
+                if len(files) + len(urls) > MAX_IMAGES:
+                    raise ImageInputError("最多 4 张图片（含主图）", code="too_many_images")
+                contents = []
+                for file_path in files:
+                    with open(file_path, "rb") as uploaded:
+                        contents.append(uploaded.read(MAX_BYTES + 1))
+                paths = prepare_images(contents, urls, folder)
+                input_path, edit_mode = collage(paths, __import__("pathlib").Path(folder) / "references.png")
+                input_count = len(paths)
+            for idx in range(count):
+                result, meta = route_generate(
+                    model, prompt, width, height,
+                    seed=int(seed) if seed is not None else -1, token=token or None,
+                    image_path=input_path, strength=strength,
+                    download_files=True, headers=headers,
+                )
+                images.append((local_image_path(result), f"第 {idx+1} 张 · {spec.name}"))
+                messages.append(meta + (f" | {edit_mode} | 输入 {input_count} 张" if input_count else ""))
     except (ModelMismatch, ModelUnavailable) as exc:
+        raise gr.Error(str(exc)) from None
+    except ImageInputError as exc:
         raise gr.Error(str(exc)) from None
     except Exception as exc:
         if not images:
@@ -99,7 +121,7 @@ def refresh_active_model():
                   value=SIZE_LABEL(spec.default_size), interactive=True),
         gr.update(value="文生图"),
         gr.update(visible=False), gr.update(visible=False),
-        gr.update(value=f"当前已加载：{spec.name}（{active}）。如需其他模型，请联系管理员切换。"),
+        gr.update(value=f"当前已加载：{spec.name}（{active}）。\\n\\n使用说明：{spec.usage_notes}\\n\\n如需其他模型，请联系管理员切换。"),
         gr.update(interactive=True),
     )
 
@@ -127,7 +149,11 @@ with gr.Blocks(title="AI 图片工作室") as demo:
             mode = gr.Radio(["文生图", "图片编辑"], value="文生图", label="生成模式")
             prompt = gr.Textbox(label="图片描述", lines=5, max_lines=8,
                                 placeholder="描述你想生成的画面，或者说明如何修改原图……")
-            source = gr.Image(type="filepath", label="上传原图（图片编辑使用）", visible=False)
+            source = gr.File(file_count="multiple", type="filepath", file_types=["image"],
+                             label="上传图片（第1张为主图，后续为参考图，最多4张）", visible=False)
+            image_urls = gr.Textbox(label="公共图片 URL（每行一条，按顺序追加到上传图片后）",
+                                    lines=3, visible=False,
+                                    placeholder="https://example.com/reference.jpg")
             with gr.Row():
                 model = gr.Dropdown([MODELS["z-image-turbo"].name], value=MODELS["z-image-turbo"].name,
                                     label="当前可用模型", interactive=False)
@@ -169,12 +195,13 @@ with gr.Blocks(title="AI 图片工作室") as demo:
                          api_visibility="private")
     mode.change(
         lambda value: (gr.update(visible=value == "图片编辑"),
+                       gr.update(visible=value == "图片编辑"),
                        gr.update(visible=value == "图片编辑")),
-        inputs=mode, outputs=[source, strength], api_visibility="private",
+        inputs=mode, outputs=[source, image_urls, strength], api_visibility="private",
     )
     run.click(
         generate,
-        inputs=[mode, model, prompt, source, size, count, strength, seed, token],
+        inputs=[mode, model, prompt, source, image_urls, size, count, strength, seed, token],
         outputs=[gallery, info],
         api_visibility="private", concurrency_limit=4,
     )

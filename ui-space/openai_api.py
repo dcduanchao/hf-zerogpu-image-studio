@@ -1,6 +1,5 @@
 """OpenAI Images-compatible subset; deploy on trusted CPU host (NOT ZeroGPU)."""
 import base64
-import io
 import re
 import time
 from pathlib import Path
@@ -11,12 +10,8 @@ from fastapi.responses import JSONResponse
 from model_registry import MODELS, get_model
 from model_router import generate as route_generate, image_url, local_image_path
 from model_state import active_model_id, ModelMismatch, ModelUnavailable
-from PIL import Image, UnidentifiedImageError
+from input_images import ImageInputError, MAX_BYTES, MAX_IMAGES, parse_urls, prepare_images, collage
 from pydantic import BaseModel, Field
-
-MAX_UPLOAD_BYTES = 12 * 1024 * 1024
-MAX_PIXELS = 16_000_000
-Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 
 app = FastAPI(title="ZeroGPU OpenAI-Compatible Images API")
 
@@ -105,7 +100,7 @@ def to_base64(path):
 
 
 def predict(model, prompt, size, n, token, image_path=None, strength=0.6,
-            seed=-1, response_format="url"):
+            seed=-1, response_format="url", input_image_count=0, edit_mode=None):
     active, resolved_size, width, height = validate(model, size, n, edit=image_path is not None)
     if response_format not in ("url", "b64_json"):
         raise api_error(400, "unsupported_format", "仅支持 url 或 b64_json")
@@ -129,7 +124,11 @@ def predict(model, prompt, size, n, token, image_path=None, strength=0.6,
         raise api_error(503, "gpu_model_unavailable", str(exc)) from None
     except Exception as exc:
         raise classify_error(exc) from None
-    return {"created": int(time.time()), "model": active, "size": resolved_size, "data": data}
+    result = {"created": int(time.time()), "model": active, "size": resolved_size, "data": data}
+    if input_image_count:
+        result["input_image_count"] = input_image_count
+        result["edit_mode"] = edit_mode or "single_image"
+    return result
 
 
 @app.get("/health")
@@ -150,7 +149,9 @@ def active_model():
 def models():
     return {"object": "list", "data": [
         {"id": name, "object": "model", "owned_by": spec.space_id, "name": spec.name,
-         "sizes": list(spec.sizes), "supports_edits": spec.can_edit}
+         "sizes": list(spec.sizes), "supports_edits": spec.can_edit,
+         "supports_multi_reference": spec.multi_reference,
+         "supports_public_url": spec.public_url, "usage_notes": spec.usage_notes}
         for name, spec in MODELS.items()
     ]}
 
@@ -166,7 +167,9 @@ def generate_images(req: GenerateRequest,
 
 @app.post("/v1/images/edits")
 async def edit_images(
-    image: UploadFile = File(...),
+    image: list[UploadFile] | None = File(None),
+    image_urls: str | None = Form(None),
+    image_url: list[str] | None = Form(None),
     prompt: str = Form(...),
     model: str | None = Form(None),
     size: str = Form("512x512"),
@@ -181,19 +184,25 @@ async def edit_images(
         raise api_error(400, "invalid_prompt", "提示词不能为空且不能超出 4000 字")
     if not 0.05 <= strength <= 1.0:
         raise api_error(400, "invalid_strength", "strength 必须在 0.05~1")
-    body = await image.read(MAX_UPLOAD_BYTES + 1)
-    if len(body) > MAX_UPLOAD_BYTES:
-        raise api_error(413, "image_too_large", "最大上传 12 MB")
+    # Reject edits on text-only models before downloading any supplied URL.
+    validate(model, size, n, edit=True)
     try:
-        with Image.open(io.BytesIO(body)) as img:
-            img.load()
-            if img.width * img.height > MAX_PIXELS:
-                raise api_error(413, "too_many_pixels", "输入图片像素过多")
-            import tempfile
-            with tempfile.TemporaryDirectory(prefix="image_gateway_") as folder:
-                filename = Path(folder) / "source.png"
-                img.convert("RGB").save(filename, "PNG")
-                return predict(model, prompt, size, n, token, image_path=filename,
-                               strength=strength, response_format=response_format)
-    except (UnidentifiedImageError, ValueError, OSError):
-        raise api_error(400, "invalid_image", "上传的图片不能读取") from None
+        urls = parse_urls(image_urls or "", image_url)
+        uploads = image or []
+        if len(uploads) + len(urls) > MAX_IMAGES:
+            raise ImageInputError("最多允许 4 张输入图片（含主图）", code="too_many_images")
+        contents = []
+        for upload in uploads:
+            payload = await upload.read(MAX_BYTES + 1)
+            contents.append(payload)
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="image_gateway_") as folder:
+            paths = prepare_images(contents, urls, folder)
+            input_path, edit_mode = collage(paths, Path(folder) / "references.png")
+            return predict(
+                model, prompt, size, n, token, image_path=input_path,
+                strength=strength, response_format=response_format,
+                input_image_count=len(paths), edit_mode=edit_mode,
+            )
+    except ImageInputError as exc:
+        raise api_error(exc.status, exc.code, str(exc)) from None
