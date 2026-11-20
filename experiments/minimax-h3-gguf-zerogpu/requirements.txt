@@ -1,5 +1,7 @@
 huggingface_hub>=0.34,<2
 accelerate>=1.10
+# Required by Qwen3VLVideoProcessor; pip must match preinstalled torch ABI.
+torchvision
 transformers>=5.3,<5.4
 safetensors>=0.6
 sentencepiece
