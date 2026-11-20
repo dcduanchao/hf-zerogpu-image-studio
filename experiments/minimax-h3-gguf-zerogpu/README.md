@@ -7,7 +7,7 @@ sdk: gradio
 sdk_version: 6.15.1
 app_file: app.py
 python_version: 3.12
-short_description: Verify native subprocess CUDA support on ZeroGPU before MiniMax H3 GGUF inference
+short_description: MiniMax H3 GGUF ZeroGPU CUDA test
 models:
   - Hearthscale/MiniMax-H3-Image-GGUF
 ---
