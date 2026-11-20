@@ -185,6 +185,136 @@ def run_native_cuda_probe():
     return json.dumps(report, ensure_ascii=False, indent=2)
 
 
+
+# Prewritten PTX is loaded via libcuda and JIT-compiled by the GPU driver.
+# This does not use nvcc, torch, or model weights. It does execute a real kernel.
+CUDA_KERNEL_C = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dlfcn.h>
+typedef int CUresult;
+typedef int CUdevice;
+typedef void* CUcontext;
+typedef void* CUmodule;
+typedef void* CUfunction;
+typedef unsigned long long CUdeviceptr;
+
+static const char ptx[] =
+".version 7.0\n"
+".target sm_80\n"
+".address_size 64\n"
+".visible .entry increment(.param .u64 ptr) {\n"
+"  .reg .b64 %rd<3>;\n"
+"  .reg .b32 %r<3>;\n"
+"  ld.param.u64 %rd1, [ptr];\n"
+"  cvta.to.global.u64 %rd2, %rd1;\n"
+"  ld.global.u32 %r1, [%rd2];\n"
+"  add.u32 %r2, %r1, 1;\n"
+"  st.global.u32 [%rd2], %r2;\n"
+"  ret;\n"
+"}\n";
+
+int main(void) {
+    void *lib = dlopen("libcuda.so.1", RTLD_NOW);
+    if (!lib) { fprintf(stderr, "libcuda missing: %s\n", dlerror()); return 10; }
+#define SYMBOL(name) dlsym(lib, name)
+    CUresult (*cuInit)(unsigned int) = SYMBOL("cuInit");
+    CUresult (*cuDeviceGet)(CUdevice*, int) = SYMBOL("cuDeviceGet");
+    CUresult (*cuCtxCreate)(CUcontext*, unsigned int, CUdevice) = SYMBOL("cuCtxCreate_v2");
+    CUresult (*cuMemAlloc)(CUdeviceptr*, size_t) = SYMBOL("cuMemAlloc_v2");
+    CUresult (*cuMemcpyHtoD)(CUdeviceptr, const void*, size_t) = SYMBOL("cuMemcpyHtoD_v2");
+    CUresult (*cuMemcpyDtoH)(void*, CUdeviceptr, size_t) = SYMBOL("cuMemcpyDtoH_v2");
+    CUresult (*cuModuleLoadData)(CUmodule*, const void*) = SYMBOL("cuModuleLoadData");
+    CUresult (*cuModuleGetFunction)(CUfunction*, CUmodule, const char*) = SYMBOL("cuModuleGetFunction");
+    CUresult (*cuLaunchKernel)(CUfunction, unsigned int, unsigned int, unsigned int,
+        unsigned int, unsigned int, unsigned int, unsigned int, void*, void**, void**) = SYMBOL("cuLaunchKernel");
+    CUresult (*cuCtxSynchronize)(void) = SYMBOL("cuCtxSynchronize");
+    CUresult (*cuModuleUnload)(CUmodule) = SYMBOL("cuModuleUnload");
+    CUresult (*cuMemFree)(CUdeviceptr) = SYMBOL("cuMemFree_v2");
+    CUresult (*cuCtxDestroy)(CUcontext) = SYMBOL("cuCtxDestroy_v2");
+    if (!cuInit || !cuDeviceGet || !cuCtxCreate || !cuMemAlloc ||
+        !cuMemcpyHtoD || !cuMemcpyDtoH || !cuModuleLoadData || !cuModuleGetFunction ||
+        !cuLaunchKernel || !cuCtxSynchronize || !cuModuleUnload || !cuMemFree || !cuCtxDestroy) {
+        fprintf(stderr, "CUDA driver API symbols missing\n"); return 11;
+    }
+#define CHECK(expr, label) do { CUresult error=(expr); if(error) { \
+        fprintf(stderr, "%s returned %d\n", label, error); return 12; } } while(0)
+    CUdevice dev = 0; CUcontext ctx = NULL; CUmodule module = NULL;
+    CUfunction kernel = NULL; CUdeviceptr data = 0;
+    unsigned int host = 41;
+    CHECK(cuInit(0), "cuInit");
+    CHECK(cuDeviceGet(&dev, 0), "cuDeviceGet");
+    CHECK(cuCtxCreate(&ctx, 0, dev), "cuCtxCreate");
+    CHECK(cuMemAlloc(&data, sizeof(host)), "cuMemAlloc");
+    CHECK(cuMemcpyHtoD(data, &host, sizeof(host)), "cuMemcpyHtoD");
+    CHECK(cuModuleLoadData(&module, ptx), "cuModuleLoadData");
+    CHECK(cuModuleGetFunction(&kernel, module, "increment"), "cuModuleGetFunction");
+    void *args[] = { &data };
+    CHECK(cuLaunchKernel(kernel, 1,1,1, 1,1,1, 0, NULL, args, NULL), "cuLaunchKernel");
+    CHECK(cuCtxSynchronize(), "cuCtxSynchronize");
+    CHECK(cuMemcpyDtoH(&host, data, sizeof(host)), "cuMemcpyDtoH");
+    printf("native_cuda_kernel_result=%u\n", host);
+    cuModuleUnload(module);
+    cuMemFree(data);
+    cuCtxDestroy(ctx);
+    dlclose(lib);
+    return host == 42 ? 0 : 13;
+}
+"""
+
+
+@spaces.GPU(duration=60, size="large")
+def run_cuda_kernel_probe():
+    """Run one actual native CUDA GPU kernel from a separate binary process."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    report = {
+        "stage": "standalone CUDA kernel execution using Driver API + PTX",
+        "hardware": "ZeroGPU large",
+        "zero_gpu": os.environ.get("SPACES_ZERO_GPU", ""),
+    }
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if not compiler:
+        report["outcome"] = "No C compiler found"
+        return json.dumps(report, ensure_ascii=False, indent=2)
+    try:
+        with tempfile.TemporaryDirectory(prefix="zerogpu_ptx_") as folder:
+            source = Path(folder) / "kernel.c"
+            exe = Path(folder) / "kernel"
+            source.write_text(CUDA_KERNEL_C, encoding="utf-8")
+            build = subprocess.run(
+                [compiler, "-O2", str(source), "-o", str(exe), "-ldl"],
+                capture_output=True, text=True, timeout=20, check=False,
+            )
+            report["compile_exit"] = build.returncode
+            if build.returncode != 0:
+                report["compile_error"] = build.stderr[-1000:]
+                report["outcome"] = "COMPILATION FAILED"
+            else:
+                run = subprocess.run(
+                    [str(exe)], capture_output=True, text=True, timeout=25,
+                    check=False,
+                )
+                report["execute_exit"] = run.returncode
+                report["stdout"] = run.stdout.strip()[:400]
+                report["stderr"] = run.stderr.strip()[-700:]
+                report["outcome"] = (
+                    "NATIVE CUDA KERNEL PASS"
+                    if run.returncode == 0 and "native_cuda_kernel_result=42" in run.stdout
+                    else "NATIVE CUDA KERNEL FAIL"
+                )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        report["outcome"] = type(exc).__name__
+        report["error"] = str(exc)[:250]
+    report["next_step"] = (
+        "If PASS, build the actual CUDA-enabled stable-diffusion.cpp CLI "
+        "and test its model-loading path with MiniMax GGUF weights."
+    )
+    return json.dumps(report, ensure_ascii=False, indent=2)
+
+
 with gr.Blocks(title="MiniMax H3 GGUF — ZeroGPU test") as demo:
     gr.Markdown(
         "# MiniMax H3 GGUF · ZeroGPU 兼容性测试\n"
@@ -205,6 +335,14 @@ with gr.Blocks(title="MiniMax H3 GGUF — ZeroGPU test") as demo:
     native_button.click(
         run_native_cuda_probe, inputs=[], outputs=native_output,
         api_name="native_cuda_probe", concurrency_limit=1,
+    )
+    gr.Markdown("## 第三阶段 · 独立原生 CUDA Kernel 执行")
+    gr.Markdown("用单独 C 子进程加载 PTX 并真正执行 CUDA Kernel（41 → 42），不需要 nvcc 或模型权重。")
+    kernel_button = gr.Button("执行 CUDA Kernel 测试")
+    kernel_output = gr.Code(label="CUDA Kernel 测试结果", language="json", lines=15)
+    kernel_button.click(
+        run_cuda_kernel_probe, inputs=[], outputs=kernel_output,
+        api_name="cuda_kernel_probe", concurrency_limit=1,
     )
     gr.Markdown(
         "**下一阶段：** 只有本测试成功，才尝试将 "
