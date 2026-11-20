@@ -84,7 +84,7 @@ Keep `gpu-space/README.md` and `ui-space/README.md`: their YAML front matter is 
 
 ```bash
 python -m compileall -q gpu-space ui-space scripts
-python -m pip install 'huggingface_hub>=0.34,<2,<3' 'gradio_client>=1.13,<3'
+python -m pip install 'huggingface_hub>=0.34,<2' 'gradio_client>=1.13,<3'
 python scripts/test_admin_switch.py
 python scripts/test_model_state.py
 ```
@@ -187,6 +187,25 @@ curl -sS "$BASE/v1/images/edits" \
 ```
 
 This endpoint only works when Z-Image is the active model. Uploads are limited to **12 MB** and **16 million pixels**; `strength` must be between `0.05` and `1.0`. `n` is 1–4. The generation JSON supports `prompt`, `model`, `size`, `n`, `seed` and `response_format`; editing uses multipart form fields.
+
+
+### Experimental multi-image edits and public URLs
+
+When `z-image-turbo` is active, `/v1/images/edits` accepts **1–4 images** total, using uploaded files and/or public HTTP(S) image URLs. Uploaded files are ordered first, followed by URLs in the given order. **The first image is primary** and the others are references. For more than one image, the CPU service builds a tiled *contact sheet* and passes it as **one** image-to-image input. This is **experimental collage-based editing**, not native multi-image model conditioning; subject identity or reference fidelity is not guaranteed.
+
+```bash
+curl -sS "$BASE/v1/images/edits" \
+  -F "image=@main.png" \
+  -F "image=@reference.png" \
+  -F 'image_urls=["https://example.com/reference2.jpg"]' \
+  -F "prompt=use the subject from image one with colors from references" \
+  -F "size=1024x1024" \
+  -F "strength=0.6"
+```
+
+In Postman use **Body → form-data**, with repeated `image` fields set to **File**. Specify `image_urls` as a JSON array string or repeat the `image_url` text field. Only publicly accessible HTTP(S) image URLs are allowed, with private addresses and redirects blocked. Maximum **12 MB / 16 million pixels per image**; PNG, JPEG, WebP and GIF are accepted. Responses provide the effective `model`, `size`, `input_image_count` and `edit_mode` (`single_image` or `experimental_reference_collage`). The UI supports multiple uploads and URLs, and the UI and `GET /v1/models` document per-model capabilities and usage notes.
+
+The existing `moss-image` plugin remains **text-to-image only** and returns `unsupported_edit` for edits instead of silently ignoring reference images.
 
 ### Error handling
 

@@ -86,7 +86,7 @@ my-zerogpu-engine (ZeroGPU, Gradio)
 
 ```bash
 python -m compileall -q gpu-space ui-space scripts
-python -m pip install 'huggingface_hub>=0.34,<2,<3' 'gradio_client>=1.13,<3'
+python -m pip install 'huggingface_hub>=0.34,<2' 'gradio_client>=1.13,<3'
 python scripts/test_admin_switch.py
 python scripts/test_model_state.py
 ```
@@ -187,6 +187,26 @@ curl -sS "$BASE/v1/images/edits" \
 ```
 
 仅在当前加载 `z-image-turbo` 时可用。上传图片上限 **12 MB**，最大 **1600 万像素**；`strength` 范围 `0.05`～`1.0`。请求数 `n` 为 1～4。JSON 文生图支持 `prompt`、`model`、`size`、`n`、`seed`、`response_format`；编辑使用 `multipart/form-data`。
+
+
+### 实验性多图编辑和公共 URL 输入
+
+仅当前活动模型为 `z-image-turbo` 时可以调用 `/v1/images/edits`：共支持 **1～4 张输入图**，包括本地文件和公共 HTTP(S) 图片 URL。上传文件先按表单出现顺序排列，其次按 URL 数组顺序排列；**第 1 张为主图，后续为参考图**。多于 1 张时，CPU 服务先将所有图片按顺序排列为拼图，再作为**一张** img2img 输入传给 Z-Image。这是**实验性的参考拼图**，并非多图原生条件输入，不保证身份、服饰、风格或主体的准确融合。
+
+```bash
+# Postman: Body -> form-data，重复 image 字段并设置类型 File
+curl -sS "$BASE/v1/images/edits" \
+  -F "image=@main.png" \
+  -F "image=@reference.png" \
+  -F 'image_urls=["https://example.com/reference2.jpg"]' \
+  -F "prompt=use the subject from the first image with color inspiration from references" \
+  -F "size=1024x1024" \
+  -F "strength=0.6"
+```
+
+URL 参数既可用 `image_urls`（JSON 数组字符串），也可重复使用 `image_url` 字段。仅允许公开可达 HTTP/HTTPS 站点，禁止私有地址和重定向；每张图最多 **12 MB / 1600 万像素**，只接受 PNG/JPEG/WebP/GIF。返回字段包含 `model`、`size`、`input_image_count` 和 `edit_mode`（`single_image` / `experimental_reference_collage`）。网页的“图片编辑”可一次选择多张图片或逐行填入公共 URL；页面和 `GET /v1/models` 均显示每个模型的功能/使用备注。
+
+`moss-image` 当前仍然**仅支持文生图**；对 `/v1/images/edits` 返回 `unsupported_edit`，不会悄悄忽略参考图。图片 URL 会由 CPU 服务获取并验证，远程服务器必须允许公开直接访问图片。
 
 ### 错误码和运行限制
 

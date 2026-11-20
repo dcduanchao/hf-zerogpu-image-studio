@@ -1,4 +1,6 @@
 import re
+import tempfile
+from pathlib import Path
 
 import gradio as gr
 from huggingface_hub import HfApi
@@ -34,8 +36,6 @@ def generate(mode, model_label, prompt, source, image_urls, size_label, count, s
     model = MODEL_NAMES[model_label]
     try:
         require_active_model(model)
-    except ImageInputError as exc:
-        raise gr.Error(str(exc)) from None
     except (ModelMismatch, ModelUnavailable) as exc:
         raise gr.Error(str(exc)) from None
     spec = get_model(model)
@@ -63,7 +63,6 @@ def generate(mode, model_label, prompt, source, image_urls, size_label, count, s
     images = []
     messages = []
     try:
-        import tempfile
         with tempfile.TemporaryDirectory(prefix="image_ui_") as folder:
             input_path = None
             edit_mode = None
@@ -78,7 +77,7 @@ def generate(mode, model_label, prompt, source, image_urls, size_label, count, s
                     with open(file_path, "rb") as uploaded:
                         contents.append(uploaded.read(MAX_BYTES + 1))
                 paths = prepare_images(contents, urls, folder)
-                input_path, edit_mode = collage(paths, __import__("pathlib").Path(folder) / "references.png")
+                input_path, edit_mode = collage(paths, Path(folder) / "references.png")
                 input_count = len(paths)
             for idx in range(count):
                 result, meta = route_generate(
@@ -121,7 +120,7 @@ def refresh_active_model():
                   value=SIZE_LABEL(spec.default_size), interactive=True),
         gr.update(value="文生图"),
         gr.update(visible=False), gr.update(visible=False),
-        gr.update(value=f"当前已加载：{spec.name}（{active}）。\\n\\n使用说明：{spec.usage_notes}\\n\\n如需其他模型，请联系管理员切换。"),
+        gr.update(value=f"当前已加载：{spec.name}（{active}）。\n\n使用说明：{spec.usage_notes}\n\n如需其他模型，请联系管理员切换。"),
         gr.update(interactive=True),
     )
 
