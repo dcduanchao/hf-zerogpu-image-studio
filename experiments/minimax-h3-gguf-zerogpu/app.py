@@ -315,6 +315,70 @@ def run_cuda_kernel_probe():
     return json.dumps(report, ensure_ascii=False, indent=2)
 
 
+
+@spaces.GPU(duration=60, size="large")
+def probe_sd_cli():
+    """Use the real CUDA-enabled stable-diffusion.cpp binary from this test Space.
+
+    This tests dynamic-loader and CLI startup only, no GGUF download.
+    """
+    import tarfile
+    import tempfile
+    from pathlib import Path
+    report = {
+        "stage": "real stable-diffusion.cpp CUDA CLI startup",
+        "hardware": "ZeroGPU large",
+        "zero_gpu": os.environ.get("SPACES_ZERO_GPU", ""),
+    }
+    archive = Path(__file__).resolve().parent / "assets" / "sd-cli-blackwell.tar.gz"
+    report["binary_available"] = archive.is_file()
+    if not archive.is_file():
+        report["outcome"] = "BINARY NOT YET BUILT / PUBLISHED"
+        return json.dumps(report, ensure_ascii=False, indent=2)
+    try:
+        with tempfile.TemporaryDirectory(prefix="zerogpu_sdcli_") as temp:
+            with tarfile.open(archive, "r:gz") as tar:
+                for member in tar.getmembers():
+                    if member.name.lstrip("./") not in ("sd-cli", "SOURCE_SHA") or not member.isfile():
+                        raise ValueError("Unexpected build archive member")
+                tar.extractall(temp, filter="data")
+            cli = Path(temp) / "sd-cli"
+            cli.chmod(0o755)
+            # --help reports command-line capabilities and linked-library problems
+            # without loading weights. Run both ldd and the CLI executable.
+            try:
+                ldd = subprocess.run(
+                    ["ldd", str(cli)], capture_output=True, text=True,
+                    timeout=10, check=False,
+                )
+                report["ldd_missing"] = [
+                    line.strip()[:250] for line in ldd.stdout.splitlines()
+                    if "not found" in line
+                ][:15]
+            except OSError as exc:
+                report["ldd_error"] = type(exc).__name__
+            run = subprocess.run(
+                [str(cli), "--help"], capture_output=True, text=True,
+                timeout=25, check=False,
+            )
+            combined = (run.stdout + "\n" + run.stderr)
+            report["help_exit"] = run.returncode
+            report["help_preview"] = combined[:1000]
+            report["outcome"] = (
+                "SD_CLI STARTED" if not report.get("ldd_missing") and
+                ("diffusion" in combined.lower() or "usage" in combined.lower())
+                else "SD_CLI STARTUP FAILED"
+            )
+    except (OSError, ValueError, subprocess.TimeoutExpired, tarfile.TarError) as exc:
+        report["outcome"] = "error"
+        report["error"] = type(exc).__name__ + ": " + str(exc)[:350]
+    report["limitations"] = (
+        "This checks the executable starts on ZeroGPU but does not yet load "
+        "GGUF models or verify CUDA inference."
+    )
+    return json.dumps(report, ensure_ascii=False, indent=2)
+
+
 with gr.Blocks(title="MiniMax H3 GGUF — ZeroGPU test") as demo:
     gr.Markdown(
         "# MiniMax H3 GGUF · ZeroGPU 兼容性测试\n"
@@ -343,6 +407,17 @@ with gr.Blocks(title="MiniMax H3 GGUF — ZeroGPU test") as demo:
     kernel_button.click(
         run_cuda_kernel_probe, inputs=[], outputs=kernel_output,
         api_name="cuda_kernel_probe", concurrency_limit=1,
+    )
+    gr.Markdown("## 第四阶段 · stable-diffusion.cpp CUDA CLI")
+    gr.Markdown(
+        "使用 GitHub Actions 在 CUDA 12.8 工具链中构建的真实 sd-cli，"
+        "检测 CUDA 动态依赖和 --help 能否启动。尚不下载 GGUF 大权重。"
+    )
+    cli_button = gr.Button("测试 stable-diffusion.cpp CLI")
+    cli_output = gr.Code(label="sd-cli 启动检查（JSON）", language="json", lines=15)
+    cli_button.click(
+        probe_sd_cli, inputs=[], outputs=cli_output,
+        api_name="sd_cli_probe", concurrency_limit=1,
     )
     gr.Markdown(
         "**下一阶段：** 只有本测试成功，才尝试将 "

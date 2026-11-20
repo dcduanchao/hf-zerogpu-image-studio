@@ -1,0 +1,70 @@
+name: Build CUDA sd-cli for MiniMax GGUF ZeroGPU test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-minimax-sd-cli.yml"
+      - "scripts/publish_minimax_sd_cli.py"
+      - "experiments/minimax-h3-gguf-zerogpu/app.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-minimax-sd-cli-zerogpu
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_NAMESPACE: ${{ vars.HF_NAMESPACE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build actual stable-diffusion.cpp CUDA CLI (Blackwell sm_120)
+        run: |
+          mkdir -p output/sd-bin
+          docker run --rm -v "$PWD:/workspace" -w /workspace \
+            nvidia/cuda:12.8.1-devel-ubuntu22.04 bash -euo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y --no-install-recommends git cmake ninja-build build-essential libcurl4-openssl-dev ca-certificates
+              git clone --recursive https://github.com/leejet/stable-diffusion.cpp /tmp/sd-cpp
+              cd /tmp/sd-cpp
+              git checkout 532d2c15c430a785a712b2d94281f04e733008a4
+              git submodule update --init --recursive
+              cmake -S . -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DSD_BUILD_EXAMPLES=ON \
+                -DSD_CUDA=ON \
+                -DCMAKE_CUDA_ARCHITECTURES=120 \
+                -DSD_CUDA_CUTLASS_PATH:PATH=
+              cmake --build build --target sd-cli -j 4
+              BIN=$(find build -type f -name sd-cli -print -quit)
+              test -n "$BIN"
+              cp "$BIN" /workspace/output/sd-bin/sd-cli
+              chmod 755 /workspace/output/sd-bin/sd-cli
+              echo 532d2c15c430a785a712b2d94281f04e733008a4 > /workspace/output/sd-bin/SOURCE_SHA
+            '
+      - name: Inspect binary and package
+        run: |
+          file output/sd-bin/sd-cli
+          du -h output/sd-bin/sd-cli
+          tar -czf output/sd-cli-blackwell.tar.gz -C output/sd-bin .
+          ls -lh output/sd-cli-blackwell.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sd-cli-blackwell-zero-gpu
+          path: output/sd-cli-blackwell.tar.gz
+          retention-days: 7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install publish SDK
+        run: python -m pip install 'huggingface_hub>=0.34,<2'
+      - name: Publish binary into separate ZeroGPU test Space only
+        run: python scripts/publish_minimax_sd_cli.py output/sd-cli-blackwell.tar.gz
