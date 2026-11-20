@@ -1,0 +1,9 @@
+huggingface_hub>=0.34,<2
+accelerate>=1.10
+transformers>=5.3,<5.4
+safetensors>=0.6
+sentencepiece
+protobuf
+gguf>=0.17
+Pillow>=10
+diffusers @ git+https://github.com/huggingface/diffusers.git

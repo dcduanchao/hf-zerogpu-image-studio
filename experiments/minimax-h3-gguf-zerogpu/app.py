@@ -12,6 +12,8 @@ import time
 import spaces  # Must precede torch on ZeroGPU
 import gradio as gr
 
+from qwen_gguf_test import mount_qwen_section
+
 
 MODEL_ID = "Hearthscale/MiniMax-H3-Image-GGUF"
 
@@ -424,6 +426,8 @@ with gr.Blocks(title="MiniMax H3 GGUF — ZeroGPU test") as demo:
         "`stable-diffusion.cpp` 和 GGUF 权重接入本 Space。 "
         "GPU 权限受 Hugging Face 硬件设置控制。"
     )
+
+    mount_qwen_section()
 
 demo.queue(default_concurrency_limit=1)
 demo.launch()

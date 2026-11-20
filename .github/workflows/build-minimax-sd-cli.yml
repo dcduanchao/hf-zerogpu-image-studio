@@ -7,7 +7,6 @@ on:
     paths:
       - ".github/workflows/build-minimax-sd-cli.yml"
       - "scripts/publish_minimax_sd_cli.py"
-      - "experiments/minimax-h3-gguf-zerogpu/app.py"
 
 permissions:
   contents: read
