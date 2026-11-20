@@ -10,6 +10,9 @@ class ModelSpec:
     sizes: tuple[str, ...]
     default_size: str
     can_edit: bool = False
+    multi_reference: bool = False
+    public_url: bool = True
+    usage_notes: str = ""
 
 Z_SPACE = os.getenv("GPU_SPACE_ID", "duan0320/my-zerogpu-engine").strip()
 
@@ -17,13 +20,15 @@ MODELS = {
     "z-image-turbo": ModelSpec(
         "z-image-turbo", "Z-Image Turbo", Z_SPACE,
         ("512x512", "768x768", "1024x1024", "1024x768", "768x1024"),
-        "512x512", True,
+        "512x512", True, True, True,
+        "文生图及单图 img2img；多图通过参考拼图进行实验性编辑（非原生多图融合）。第1张是主图，后续为参考；公共 HTTPS/HTTP 图片 URL 可用。",
     ),
     "moss-image": ModelSpec(
         "moss-image", "MOSS-Image (Multi-LoRA)", Z_SPACE,
         ("512x512", "768x768", "1024x1024", "1024x768", "768x1024",
          "576x1024", "1024x576", "864x1536", "1536x864"),
-        "1024x1024", False,
+        "1024x1024", False, False, False,
+        "当前 MOSS-Image SFT 插件仅支持文生图，不支持图片编辑、参考图融合或图片 URL 输入。",
     ),
 }
 
