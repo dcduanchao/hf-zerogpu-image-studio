@@ -8,6 +8,7 @@ from token_quota import token_quota_info
 from input_images import ImageInputError, MAX_BYTES, MAX_IMAGES, parse_urls, prepare_images, collage
 from model_registry import MODELS, display_names, get_model
 from model_router import generate as route_generate, local_image_path
+from minimax_api import generate as minimax_generate, MiniMaxError
 from admin_switch import SwitchDenied, switch_active_model
 from model_state import active_model_id, require_active_model, ModelMismatch, ModelUnavailable
 
@@ -28,16 +29,17 @@ def friendly_error(exc):
     return "生成失败，请查看 GPU Space 的 Logs（不展示可能包含敏感数据的原始异常）。"
 
 
-def generate(mode, model_label, prompt, source, image_urls, size_label, count, strength, seed, token,
+def generate(mode, model_label, prompt, source, image_urls, size_label, count, strength, seed, token, minimax_key,
              request: gr.Request):
     prompt = (prompt or "").strip()
     if not prompt or len(prompt) > 4000:
         raise gr.Error("请输入 1～4000 字的提示词")
     model = MODEL_NAMES[model_label]
-    try:
-        require_active_model(model)
-    except (ModelMismatch, ModelUnavailable) as exc:
-        raise gr.Error(str(exc)) from None
+    if model != "minimax-h3-image":
+        try:
+            require_active_model(model)
+        except (ModelMismatch, ModelUnavailable) as exc:
+            raise gr.Error(str(exc)) from None
     spec = get_model(model)
     if mode == "图片编辑" and not source and not (image_urls or "").strip():
         raise gr.Error("图片编辑需要上传图片或提供公共图片 URL")
@@ -77,20 +79,30 @@ def generate(mode, model_label, prompt, source, image_urls, size_label, count, s
                     with open(file_path, "rb") as uploaded:
                         contents.append(uploaded.read(MAX_BYTES + 1))
                 paths = prepare_images(contents, urls, folder)
-                input_path, edit_mode = collage(paths, Path(folder) / "references.png")
+                if model == "minimax-h3-image":
+                    input_path, edit_mode = None, "native_multi_reference"
+                else:
+                    input_path, edit_mode = collage(paths, Path(folder) / "references.png")
                 input_count = len(paths)
             for idx in range(count):
-                result, meta = route_generate(
-                    model, prompt, width, height,
-                    seed=int(seed) if seed is not None else -1, token=token or None,
-                    image_path=input_path, strength=strength,
-                    download_files=True, headers=headers,
-                )
+                if model == "minimax-h3-image":
+                    result, meta = minimax_generate(
+                        prompt, width, height, minimax_key,
+                        seed=int(seed) if seed is not None else -1,
+                        images=paths if mode == "图片编辑" else None,
+                    )
+                else:
+                    result, meta = route_generate(
+                        model, prompt, width, height,
+                        seed=int(seed) if seed is not None else -1, token=token or None,
+                        image_path=input_path, strength=strength,
+                        download_files=True, headers=headers,
+                    )
                 images.append((local_image_path(result), f"第 {idx+1} 张 · {spec.name}"))
                 messages.append(meta + (f" | {edit_mode} | 输入 {input_count} 张" if input_count else ""))
     except (ModelMismatch, ModelUnavailable) as exc:
         raise gr.Error(str(exc)) from None
-    except ImageInputError as exc:
+    except (ImageInputError, MiniMaxError) as exc:
         raise gr.Error(str(exc)) from None
     except Exception as exc:
         if not images:
@@ -101,27 +113,36 @@ def generate(mode, model_label, prompt, source, image_urls, size_label, count, s
 
 
 def refresh_active_model():
-    """Refresh model choices from the GPU process actually serving inference."""
+    """Always offer MiniMax API; ZeroGPU model only when actually available."""
+    mini = MODELS["minimax-h3-image"]
     try:
         active = active_model_id()
-    except ModelUnavailable as exc:
-        return (
-            gr.update(choices=[], value=None, interactive=False),
-            gr.update(choices=[], value=None, interactive=False),
-            gr.update(value="文生图"),
-            gr.update(visible=False), gr.update(visible=False),
-            gr.update(value=f"GPU 暂时不可用：{exc}"),
-            gr.update(interactive=False),
-        )
-    spec = MODELS[active]
+        spec = MODELS[active]
+        choices = [spec.name, mini.name]
+        current = spec
+        note = f"当前 GPU：{spec.name}。可以选择 MiniMax 官方 API 独立生图。"
+    except ModelUnavailable:
+        choices = [mini.name]
+        current = mini
+        note = "ZeroGPU 暂不可用，MiniMax 官方 API 仍可使用自己的 Key 生图。"
     return (
-        gr.update(choices=[spec.name], value=spec.name, interactive=False),
-        gr.update(choices=[SIZE_LABEL(v) for v in spec.sizes],
-                  value=SIZE_LABEL(spec.default_size), interactive=True),
+        gr.update(choices=choices, value=current.name, interactive=True),
+        gr.update(choices=[SIZE_LABEL(v) for v in current.sizes],
+                  value=SIZE_LABEL(current.default_size), interactive=True),
         gr.update(value="文生图"),
-        gr.update(visible=False), gr.update(visible=False),
-        gr.update(value=f"当前已加载：{spec.name}（{active}）。\n\n使用说明：{spec.usage_notes}\n\n如需其他模型，请联系管理员切换。"),
+        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
+        gr.update(value=f"{note}\\n\\n使用说明：{current.usage_notes}"),
         gr.update(interactive=True),
+    )
+
+
+def switch_model_display(model_label):
+    spec = get_model(MODEL_NAMES[model_label])
+    return (
+        gr.update(choices=[SIZE_LABEL(v) for v in spec.sizes],
+                  value=SIZE_LABEL(spec.default_size)),
+        gr.update(value=f"当前选择：{spec.name}\\n\\n{spec.usage_notes}"),
+        gr.update(visible=spec.id == "minimax-h3-image"),
     )
 
 
@@ -142,7 +163,7 @@ CSS = """
 #hero {text-align: center; padding: 8px 0 14px;}
 """
 with gr.Blocks(title="AI 图片工作室") as demo:
-    gr.Markdown("# 🎨 AI 图片工作室\n文生图 · 图片编辑 · Hugging Face ZeroGPU", elem_id="hero")
+    gr.Markdown("# 🎨 AI 图片工作室\n文生图 · 图片编辑 · ZeroGPU / MiniMax API", elem_id="hero")
     with gr.Row():
         with gr.Column(scale=5):
             mode = gr.Radio(["文生图", "图片编辑"], value="文生图", label="生成模式")
@@ -170,6 +191,9 @@ with gr.Blocks(title="AI 图片工作室") as demo:
                 status = gr.Markdown("匿名模式：共享额度；耗尽则直接返回错误。")
                 check.click(token_info, inputs=token, outputs=status, api_visibility="private")
                 gr.Markdown("Token 仅用于本次请求，禁止记录到日志；使用你信任的 Space。")
+            minimax_key = gr.Textbox(
+                label="MiniMax API Key（仅选择 MiniMax 时填写）", type="password",
+                placeholder="MiniMax 官方平台 Key，不是 HF Token", visible=False)
             model_info = gr.Markdown("正在检查 GPU 当前模型……")
             refresh_button = gr.Button("刷新当前模型状态", size="sm")
             run = gr.Button("开始生成", variant="primary", interactive=False)
@@ -187,11 +211,15 @@ with gr.Blocks(title="AI 图片工作室") as demo:
                                  show_label=True, preview=True)
             info = gr.Textbox(label="执行信息", lines=3)
     demo.load(refresh_active_model, inputs=[],
-              outputs=[model, size, mode, source, strength, model_info, run],
+              outputs=[model, size, mode, source, image_urls, strength, model_info, run],
               api_visibility="private")
     refresh_button.click(refresh_active_model, inputs=[],
                          outputs=[model, size, mode, source, strength, model_info, run],
                          api_visibility="private")
+    model.change(
+        switch_model_display, inputs=[model], outputs=[size, model_info, minimax_key],
+        api_visibility="private",
+    )
     mode.change(
         lambda value: (gr.update(visible=value == "图片编辑"),
                        gr.update(visible=value == "图片编辑"),
@@ -200,7 +228,7 @@ with gr.Blocks(title="AI 图片工作室") as demo:
     )
     run.click(
         generate,
-        inputs=[mode, model, prompt, source, image_urls, size, count, strength, seed, token],
+        inputs=[mode, model, prompt, source, image_urls, size, count, strength, seed, token, minimax_key],
         outputs=[gallery, info],
         api_visibility="private", concurrency_limit=4,
     )

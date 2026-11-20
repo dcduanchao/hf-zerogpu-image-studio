@@ -23,6 +23,14 @@ MODELS = {
         "512x512", True, True, True,
         "文生图及单图 img2img；多图通过参考拼图进行实验性编辑（非原生多图融合）。第1张是主图，后续为参考；公共 HTTPS/HTTP 图片 URL 可用。",
     ),
+    "minimax-h3-image": ModelSpec(
+        "minimax-h3-image", "MiniMax H3-Image · 官方 API（自带 Key）", "MiniMax 官方 API",
+        ("1024x1024", "1024x768", "768x1024", "1536x1024", "1024x1536",
+         "2048x2048", "2048x1536", "1536x2048"),
+        "1024x1024", True, True, True,
+        "通过 MiniMax 官方 API 生图/多图编辑；需要独立 MiniMax API Key（不是 HF Token），"
+        "费用属于 MiniMax。此选项不在 ZeroGPU 加载 68GB 级大模型；支持最多 4 张图片或公共 URL。",
+    ),
     "moss-image": ModelSpec(
         "moss-image", "MOSS-Image (Multi-LoRA)", Z_SPACE,
         ("512x512", "768x768", "1024x1024", "1024x768", "768x1024",
@@ -37,7 +45,7 @@ def get_model(model_id: str) -> ModelSpec:
         model = MODELS[model_id]
     except KeyError:
         raise ValueError(f"未知模型：{model_id}") from None
-    if not model.space_id or "/" not in model.space_id:
+    if model_id != "minimax-h3-image" and (not model.space_id or "/" not in model.space_id):
         raise RuntimeError(f"模型 {model_id} 的 Space ID 未配置")
     return model
 
